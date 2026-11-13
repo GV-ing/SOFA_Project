@@ -5,21 +5,23 @@ Genera le figure del Progetto 5 da una cartella di campagna (results/mc_finale):
 
   fig_tornado.png          coefficienti di regressione di H (punti di H per +20%)
   fig_H_realizzazioni.png  H per realizzazione, nominale e soglia 1.3 x nominale
-  fig_forze_contatto.png   forza di contatto nella finestra di 5 s, rigido e soffice
+  fig_forze_contatto.png   forza nella finestra di 5 s (media, min-max) e banda 4.5-5.5 mN
   fig_isteresi_nominale.png   cicli dY(u) nominali    (se ci sono le serie temporali)
   fig_contatto_nominale.png   F(t) e k(t) nominali    (se ci sono le serie temporali)
 
-Serie temporali: <campagna>/series/<caso>.csv; in mancanza, per i cicli liberi si usano
-results/free_<config>.csv prodotti da tools/run_cycle.py.
+Serie temporali: <campagna>/series/<caso>.csv; in mancanza si usano quelle dei casi nominali
+di tools/run_cycle.py (results/nominali/). Da li' si prende anche l'ordine della molla (b)
+non usato nel Monte Carlo, mostrato solo nel ciclo nominale.
 
 Uso (non richiede SOFA):
-    python3.12 tools/make_figures.py --campaign results/mc_finale --out results/figures
+    env -u PYTHONPATH python3 tools/make_figures.py --campaign results/mc_finale --out results/figures
 """
 
 import argparse
 import csv
 import json
 import os
+import sys
 
 import matplotlib
 
@@ -28,13 +30,17 @@ import matplotlib.pyplot as plt  # noqa: E402
 import numpy as np  # noqa: E402
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+NOMINALI = os.path.join(PROJECT_DIR, "results", "nominali")
+sys.path.insert(0, PROJECT_DIR)
+from modules.config import NOMINAL_PARAMS  # noqa: E402
 
-# Palette categoriale validata (slot 1-2) + inchiostri
-C_FIXED, C_SWITCH, C_DIRECT = "#2a78d6", "#eb6834", "#52514e"
-INK, INK2, GRID, BAND = "#0b0b0b", "#52514e", "#e4e3df", "#1baf7a"
-LABEL = {"fixed": "(a) molla fissa k = 1.2 N/mm", "switched": "(b) due livelli 0.6 / 4.8 N/mm",
-         "direct": "attuazione diretta k = 50 N/mm"}
-COLOR = {"fixed": C_FIXED, "switched": C_SWITCH, "direct": C_DIRECT}
+# Palette categoriale validata (slot 1-3) + inchiostri; banda in grigio neutro
+C_FIXED, C_SWITCH, C_OTHER, C_DIRECT = "#2a78d6", "#eb6834", "#1baf7a", "#52514e"
+INK, INK2, GRID, BAND = "#0b0b0b", "#52514e", "#e4e3df", "#9c9b95"
+ORDER = {"low": "0.6 libero / 4.8 in contatto", "high": "4.8 libero / 0.6 in contatto"}
+LABEL = {"fixed": "(a) molla fissa k = 1.2 N/mm", "switched": "(b) due livelli",
+         "other": "(b) ordine non scelto", "direct": "attuazione diretta k = 50 N/mm"}
+COLOR = {"fixed": C_FIXED, "switched": C_SWITCH, "other": C_OTHER, "direct": C_DIRECT}
 PARAM = {"E": "E (carico/scarico)", "Fh_mat": "F_h materiale", "Fh_spring": "F_h molla",
          "c": "smorzamento c", "k": "rigidezza k", "yt": "offset tendine y_t"}
 
@@ -134,34 +140,37 @@ def fig_H(summary, reals, latest, out):
 def fig_forces(reals, latest, out):
     ids = [r["realization"] for r in reals]
     x = np.arange(len(ids))
-    fig, axes = plt.subplots(1, 2, figsize=(9.2, 3.6))
+    ref, b = NOMINAL_PARAMS["force_ref"] * 1e3, NOMINAL_PARAMS["force_band"]
+    lo_b, hi_b = ref * (1 - b), ref * (1 + b)
+    fig, axes = plt.subplots(1, 2, figsize=(9.2, 3.6), sharey=True)
+    lo, hi = lo_b - 0.4, hi_b + 0.4
     for ax, obj, title in ((axes[0], "rigid", "Oggetto rigido"),
                            (axes[1], "soft", "Oggetto soffice (E = 5 kPa)")):
-        ax.axhspan(10, 50, color=BAND, alpha=0.10, linewidth=0)
-        ax.axhline(10, color=BAND, linewidth=1)
-        ax.axhline(50, color=BAND, linewidth=1)
+        ax.axhspan(lo_b, hi_b, color=BAND, alpha=0.18, linewidth=0)
         for cfg, dx in (("fixed", -0.12), ("switched", 0.12)):
-            F = [1e3 * (metric(latest, i, cfg, obj, "F_mean_N") or np.nan) for i in ids]
-            st = [metric(latest, i, cfg, obj, "stable") for i in ids]
-            ax.scatter(x + dx, F, s=30, color=COLOR[cfg], edgecolor="white", linewidth=1,
-                       zorder=3, label=LABEL[cfg])
-            bad = [j for j, s in enumerate(st) if s is False]
+            get = lambda key: np.array([1e3 * (metric(latest, i, cfg, obj, key) or np.nan)
+                                        for i in ids])
+            Fm, Fmin, Fmax = get("F_mean_N"), get("F_min_N"), get("F_max_N")
+            ax.errorbar(x + dx, Fm, yerr=[Fm - Fmin, Fmax - Fm], fmt="o", ms=5,
+                        color=COLOR[cfg], elinewidth=1.4, capsize=0, label=LABEL[cfg], zorder=3)
+            bad = [j for j, i in enumerate(ids)
+                   if metric(latest, i, cfg, obj, "stable") is False
+                   or metric(latest, i, cfg, obj, "in_band") is False]
             if bad:
-                ax.scatter(x[bad] + dx, np.array(F)[bad], s=80, facecolor="none",
-                           edgecolor=INK, linewidth=1.2, zorder=4)
-            Fn = metric(latest, "nominal", cfg, obj, "F_mean_N")
-            if Fn is not None:
-                ax.axhline(1e3 * Fn, color=COLOR[cfg], linewidth=1, alpha=0.8)
-        ax.text(0.98, 38, "range di interesse\n10–50 mN", transform=ax.get_yaxis_transform(),
-                color=INK2, fontsize=8, va="center", ha="right")
+                ax.scatter(x[bad] + dx, Fm[bad], s=90, facecolor="none", edgecolor=INK,
+                           linewidth=1.2, zorder=4)
+            if np.isfinite(Fmin).any():
+                lo, hi = min(lo, np.nanmin(Fmin) - 0.2), max(hi, np.nanmax(Fmax) + 0.2)
+        ax.text(0.98, hi_b, f"banda {lo_b:g}-{hi_b:g} mN ", transform=ax.get_yaxis_transform(),
+                color=INK2, fontsize=8, va="bottom", ha="right")
         ax.set_xticks(x[::2], ids[::2], fontsize=8)
-        ax.set_ylim(0, 65)
-        ax.set_ylabel("forza media nella finestra di 5 s [mN]")
         ax.set_title(title, loc="left")
         ax.grid(axis="x", visible=False)
+    axes[0].set_ylim(lo, hi)
+    axes[0].set_ylabel("F nella finestra di 5 s [mN]\n(punto: media, barra: min-max)")
     handles, labels = axes[0].get_legend_handles_labels()
-    fig.suptitle("Prova di contatto: arresto a 30 mN (o a fine corsa), poi motore fermo; "
-                 "tutte le prove risultano stabili", x=0.01, ha="left", fontsize=10.5,
+    fig.suptitle(f"Prova di contatto: forza mantenuta a {ref:g} mN +/-{b * 100:g} % "
+                 "(cerchio: prova instabile o fuori banda)", x=0.01, ha="left", fontsize=10.5,
                  fontweight="bold")
     fig.tight_layout(rect=(0, 0.07, 1, 1))
     fig.legend(handles, labels, loc="lower center", ncol=2, fontsize=8.5)
@@ -182,65 +191,84 @@ def read_series(path):
 
 
 def find_series(campaign, case_id, fallback=None):
-    p = os.path.join(campaign, "series", f"{case_id}.csv")
-    if os.path.exists(p):
+    """Serie della campagna (case_id) o, in mancanza, quella di fallback."""
+    p = os.path.join(campaign, "series", f"{case_id}.csv") if case_id else None
+    if p and os.path.exists(p):
         return read_series(p)
     if fallback and os.path.exists(fallback):
         return read_series(fallback)
     return None
 
 
-def fig_hysteresis(summary, campaign, out):
-    fig, axes = plt.subplots(1, 3, figsize=(10.5, 3.4))
+def _nominal_H(case):
+    """H del ciclo libero nominale da results/nominali/free_<case>.json, se esiste."""
+    p = os.path.join(NOMINALI, f"free_{case}.json")
+    if not os.path.exists(p):
+        return None
+    with open(p, encoding="utf-8") as f:
+        return json.load(f).get("H_pct")
+
+
+def fig_hysteresis(summary, campaign, out, level):
+    other = "low" if level == "high" else "high"
+    panels = (("fixed", "nominal_fixed_free", "fixed", summary["configs"]["fixed"]["H_nominal_pct"]),
+              ("switched", "nominal_switched_free", f"switched_{level}",
+               summary["configs"]["switched"]["H_nominal_pct"]),
+              ("other", None, f"switched_{other}", _nominal_H(f"switched_{other}")),
+              ("direct", "nominal_direct_free", "direct", summary["H_direct_nominal_pct"]))
+    fig, axes = plt.subplots(1, 4, figsize=(13, 3.4))
     found = False
-    for ax, cfg in zip(axes, ("fixed", "switched", "direct")):
-        s = find_series(campaign, f"nominal_{cfg}_free",
-                        os.path.join(PROJECT_DIR, "results", f"free_{cfg}.csv"))
-        if s is None:
+    for ax, (key, case_id, nominal_case, H) in zip(axes, panels):
+        s = find_series(campaign, case_id, os.path.join(NOMINALI, f"free_{nominal_case}.csv"))
+        if s is None or H is None:
             ax.set_visible(False)
             continue
         found = True
         load_ = s["phase"] == "load"
         unl = s["phase"] == "unload"
-        ax.plot(s["u"][load_], 1e3 * s["dY"][load_], color=COLOR[cfg], label="carico")
-        ax.plot(s["u"][unl], 1e3 * s["dY"][unl], color=COLOR[cfg], linestyle=(0, (4, 2)),
+        ax.plot(s["u"][load_], 1e3 * s["dY"][load_], color=COLOR[key], label="carico")
+        ax.plot(s["u"][unl], 1e3 * s["dY"][unl], color=COLOR[key], linestyle=(0, (4, 2)),
                 label="scarico")
-        H = (summary["H_direct_nominal_pct"] if cfg == "direct"
-             else summary["configs"][cfg]["H_nominal_pct"])
-        ax.set_title(f"{LABEL[cfg]}\nH = {H:.1f} %", loc="left")
+        name = LABEL[key]
+        if key in ("switched", "other"):
+            name = f"(b) {ORDER[level if key == 'switched' else other]}"
+        ax.set_title(f"{name}\nH = {H:.1f} %", loc="left")
         ax.set_xlabel("comando motore u [mm]")
         ax.set_ylabel("deflessione punta ΔY [µm]")
         ax.legend(loc="upper left", fontsize=8)
     if found:
-        fig.suptitle("Cicli di carico e scarico nominali in moto libero", x=0.01, ha="left",
-                     fontsize=11, fontweight="bold")
+        fig.suptitle("Cicli di carico e scarico nominali in moto libero (inversione a T = 10 N "
+                     "o u = 15 mm)", x=0.01, ha="left", fontsize=11, fontweight="bold")
         fig.tight_layout()
         fig.savefig(os.path.join(out, "fig_isteresi_nominale.png"))
     plt.close(fig)
     return found
 
 
-def fig_contact_time(campaign, out):
+def fig_contact_time(campaign, out, level):
+    ref, b = NOMINAL_PARAMS["force_ref"] * 1e3, NOMINAL_PARAMS["force_band"]
     fig, axes = plt.subplots(2, 2, figsize=(9.2, 5.2), sharex="col")
     found = False
     for col, obj in enumerate(("rigid", "soft")):
-        for cfg in ("fixed", "switched"):
-            s = find_series(campaign, f"nominal_{cfg}_{obj}")
+        for cfg, case in (("fixed", "fixed"), ("switched", f"switched_{level}")):
+            s = find_series(campaign, f"nominal_{cfg}_{obj}",
+                            os.path.join(NOMINALI, f"contact_{obj}_{case}.csv"))
             if s is None:
                 continue
             found = True
             axes[0, col].plot(s["t"], 1e3 * s["F_contact"], color=COLOR[cfg], label=LABEL[cfg])
-            axes[1, col].plot(s["t"], s["k"], color=COLOR[cfg])
-        axes[0, col].axhspan(10, 50, color=BAND, alpha=0.10, linewidth=0)
+            axes[1, col].plot(s["t"], s["k"], color=COLOR[cfg], drawstyle="steps-post")
+        axes[0, col].axhspan(ref * (1 - b), ref * (1 + b), color=BAND, alpha=0.18, linewidth=0)
         axes[0, col].set_title("Oggetto rigido" if obj == "rigid" else "Oggetto soffice",
                                loc="left")
         axes[0, col].set_ylabel("forza di contatto [mN]")
         axes[1, col].set_ylabel("rigidezza molla k [N/mm]")
         axes[1, col].set_xlabel("tempo [s]")
     if found:
-        axes[0, 0].legend(loc="lower right", fontsize=8)
-        fig.suptitle("Prove di contatto nominali: commutazione istantanea di k a 5 mN",
-                     x=0.01, ha="left", fontsize=11, fontweight="bold")
+        axes[0, 0].legend(loc="upper right", fontsize=8)
+        fig.suptitle(f"Prove di contatto nominali: rilevamento a 5 mN, k commuta, forza regolata "
+                     f"a {ref:g} mN +/-{b * 100:g} % (fascia grigia)", x=0.01, ha="left",
+                     fontsize=10.5, fontweight="bold")
         fig.tight_layout()
         fig.savefig(os.path.join(out, "fig_contatto_nominale.png"))
     plt.close(fig)
@@ -256,11 +284,13 @@ def main():
     os.makedirs(a.out, exist_ok=True)
     style()
     summary, reals, latest = load(a.campaign)
+    level = summary.get("k_free_level", NOMINAL_PARAMS["k_free_level"])
+    LABEL["switched"] = f"(b) due livelli, {ORDER[level]}"
     fig_tornado(summary, a.out)
     fig_H(summary, reals, latest, a.out)
     fig_forces(reals, latest, a.out)
-    h = fig_hysteresis(summary, a.campaign, a.out)
-    c = fig_contact_time(a.campaign, a.out)
+    h = fig_hysteresis(summary, a.campaign, a.out, level)
+    c = fig_contact_time(a.campaign, a.out, level)
     print(f"Figure in {a.out}" + ("" if h else "  (cicli di isteresi: serie mancanti)")
           + ("" if c else "  (contatto nel tempo: serie mancanti)"))
 

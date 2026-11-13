@@ -17,7 +17,7 @@ COLONNA DESTRA - DINAMICA TEMPORALE (grafici obbligatori della traccia)
   3. Posizione della punta: DeltaY = Y - Y0 e DeltaX = X - X0  [mm]
   4. Attuazione: u (motore) e DeltaLs (allungamento molla)    [mm]
   5. Tensione del tendine T                                    [N]
-  6. Forza di contatto, soglia di commutazione 5 mN e range 10-50 mN  [mN]
+  6. Forza di contatto, soglia di rilevamento e riferimento 5 mN, banda 4.5-5.5 mN  [mN]
   7. Rigidezza della molla k (commutazione istantanea 0.6 <-> 4.8 N/mm)
 
 DIFFERENZA RISPETTO AL MODULO 06 (voluta): il plot NON gira dentro SOFA. Il Python 3.12 di
@@ -56,6 +56,8 @@ from modules.metrics import hysteresis_H  # noqa: E402
 # ==============================================================================
 F_HYST_TOT = NOMINAL_PARAMS["Fh_spring"] + NOMINAL_PARAMS["Fh_mat"]  # [N] semi-ampiezza banda
 F_TH_mN = NOMINAL_PARAMS["F_contact_th"] * 1e3                       # soglia 5 mN
+F_REF_mN = NOMINAL_PARAMS["force_ref"] * 1e3                         # riferimento 5 mN
+F_BAND_mN = NOMINAL_PARAMS["force_band"] * F_REF_mN                  # +/-0.5 mN
 TIME_WINDOW_S = 10.0          # finestra mobile dei grafici temporali [s simulati]
 MAX_POINTS = 20000
 
@@ -68,7 +70,7 @@ LEGEND = dict(facecolor="#282A36", edgecolor="#44475A", labelcolor="#F8F8F2", fo
 TIME_KEYS = ("t", "X", "Y", "dX", "dY", "u", "dLs", "T", "F", "k")
 data = {k: deque(maxlen=MAX_POINTS) for k in TIME_KEYS}
 loop = {k: [] for k in ("u", "dY", "dLs", "T", "branch")}
-state = {"x0": None, "phase": "", "z": 0.0, "E_diss": 0.0, "u_prev": None,
+state = {"x0": None, "phase": "", "contact": 0, "z": 0.0, "E_diss": 0.0, "u_prev": None,
          "branch": "load", "closed": False}
 lock = threading.Lock()
 
@@ -95,6 +97,7 @@ def add_sample(s):
     data["F"].append(s["F_contact"] * 1e3)
     data["k"].append(s["k"])
     state["phase"], state["z"] = s.get("phase", ""), s.get("z", 0.0)
+    state["contact"] = s.get("contact", 0)
 
     # Ramo del ciclo: fasi del modo autonomo, altrimenti verso di u (modo manuale)
     if s.get("phase") in ("load", "unload"):
@@ -199,8 +202,10 @@ def main():
     l_u, = a_act.plot([], [], color=C_BLUE, lw=1.8, label="u (motore)")
     l_dL, = a_act.plot([], [], color=C_ORANGE, lw=1.8, ls="--", label="DeltaLs (molla)")
     l_T, = a_T.plot([], [], color=C_DAHL, lw=1.8, label="T")
-    a_F.axhspan(10, 50, color=C_BAND, alpha=0.18, label="Range di interesse 10-50 mN")
-    a_F.axhline(F_TH_mN, color=C_ORANGE, ls="--", lw=1.2, label=f"Soglia commutazione {F_TH_mN:.0f} mN")
+    a_F.axhspan(F_REF_mN - F_BAND_mN, F_REF_mN + F_BAND_mN, color=C_BAND, alpha=0.25,
+                label=f"Banda {F_REF_mN - F_BAND_mN:g}-{F_REF_mN + F_BAND_mN:g} mN")
+    a_F.axhline(F_TH_mN, color=C_ORANGE, ls="--", lw=1.2,
+                label=f"Rilevamento e riferimento {F_TH_mN:g} mN")
     l_F, = a_F.plot([], [], color=C_HOOKE, lw=1.6, label="F contatto")
     l_k, = a_k.plot([], [], color=C_PURPLE, lw=1.8, drawstyle="steps-post", label="k")
     for ax in (a_tip, a_act, a_T, a_F, a_k):
@@ -285,12 +290,16 @@ def main():
         autoscale(a_tip, t[i0:], ts["dY"][i0:] + ts["dX"][i0:], x0=(t_lo, t_hi))
         autoscale(a_act, t[i0:], ts["u"][i0:] + ts["dLs"][i0:], x0=(t_lo, t_hi))
         autoscale(a_T, t[i0:], ts["T"][i0:], x0=(t_lo, t_hi))
-        a_F.set_ylim(0, max(55.0, max(ts["F"][i0:]) * 1.1))
+        a_F.set_ylim(0, max(2.0 * F_REF_mN, max(ts["F"][i0:]) * 1.1))
         a_k.set_ylim(0, max(ts["k"]) * 1.25)
         a_k.set_xlim(t_lo, t_hi)
 
         phase = {"load": "CARICO", "unload": "SCARICO", "hold": "MANTENIMENTO",
-                 "done": "FINE CICLO"}.get(st["phase"], "MANUALE - " + {"load": "CARICO", "unload": "SCARICO"}[st["branch"]])
+                 "regulate": "REGOLAZIONE FORZA", "done": "FINE CICLO"}.get(
+            st["phase"], "MANUALE - " + {"load": "CARICO", "unload": "SCARICO"}[st["branch"]])
+        if st["contact"]:
+            phase += " | CONTATTO"
+
         status.set_text(f"t = {t[-1]:.2f} s  |  {phase}  |  u = {ts['u'][-1]:.2f} mm  |  "
                         f"T = {ts['T'][-1]:.2f} N  |  DeltaLs = {ts['dLs'][-1]:.2f} mm  |  "
                         f"punta X = {ts['X'][-1]:.3f}, Y = {ts['Y'][-1]:.4f}, DeltaY = {ts['dY'][-1]:.4f} mm  |  "

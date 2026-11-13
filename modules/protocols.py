@@ -1,27 +1,41 @@
 # modules/protocols.py
 """Protocolli di prova del Progetto 5 eseguiti in SOFA (senza GUI).
 
-  free_cycle    ciclo libero 0 -> T_max (o u_max) -> 0, senza oggetto  -> H [%]
-  contact_test  carico a contact_rate fino a contact_stop_force o a fine corsa, poi u fermo
-                per contact_settle_s + hold_duration; stabilita' sulla finestra finale
+  free_cycle    ciclo libero senza oggetto: carico a auto_rate fino a T = auto_T_reverse
+                (10 N) o a u = u_max, poi scarico a u = 0                       -> H [%]
+  contact_test  avvicinamento a contact_rate -> rilevamento a 5 mN (k commuta nella config. b)
+                -> regolazione a 5 mN +/-10 % -> F in banda a motore fermo per contact_settle_s
+                -> finestra di hold_duration s con il regolatore attivo
+                -> stabilita' (traccia) e permanenza nella banda 4.5-5.5 mN (assistente)
 
 Usato da tools/run_cycle.py e dal Monte Carlo (modules/mc_worker.py).
 """
 
+import csv
+import os
 import time
 
-from modules.config import NOMINAL_PARAMS
+import numpy as np
+
+from modules.config import NOMINAL_PARAMS, SPRING_CONFIGS
 from modules.metrics import contact_stability, hysteresis_H
 
-CONFIGS = {
-    "fixed": {"switched_mode": False},
-    "switched": {"switched_mode": True},
-    "direct": {"switched_mode": False, "k_spring": 50.0},
-}
+CONFIGS = SPRING_CONFIGS
 
 
-def simulate(overrides, hold_s, stop_after_hold, max_time=120.0):
-    """Costruisce la scena, esegue un ciclo autonomo e restituisce (root, ctrl, passi, s)."""
+def save_series(path, history):
+    """Cronologia del controller in CSV (una riga per passo, colonne di HISTORY_FIELDS)."""
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+    keys = list(history)
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.writer(f)
+        w.writerow(keys)
+        w.writerows(zip(*(history[k] for k in keys)))
+    return path
+
+
+def simulate(overrides, stop_after_hold, max_time=120.0):
+    """Costruisce la scena, esegue un ciclo autonomo e restituisce (root, ctrl, passi, s, timeout)."""
     import Sofa.Core
     import Sofa.Simulation
 
@@ -35,7 +49,7 @@ def simulate(overrides, hold_s, stop_after_hold, max_time=120.0):
     Sofa.Simulation.init(root)
     ctrl = root.getObject("ActuationController")
     dt = float(root.dt.value)
-    ctrl.start_autonomous_cycle(hold_s=hold_s, repeat=False)
+    ctrl.start_autonomous_cycle(repeat=False)
     seen_hold, n = False, 0
     t0 = time.perf_counter()
     while ctrl.phase != "done" and n * dt < max_time:
@@ -51,7 +65,7 @@ def simulate(overrides, hold_s, stop_after_hold, max_time=120.0):
 def free_cycle(overrides):
     """Ciclo libero: restituisce (metriche, cronologia)."""
     root, ctrl, n, elapsed, timed_out = simulate(
-        {"contact_object": "none", **overrides}, hold_s=0.0, stop_after_hold=False)
+        {"contact_object": "none", **overrides}, stop_after_hold=False)
     h = {k: list(v) for k, v in ctrl.history.items()}
     out = hysteresis_H(h["u"], h["dY"], h["phase"])
     out.update(T_peak_N=float(max(h["T"])), steps=n, elapsed_s=elapsed, timed_out=timed_out)
@@ -59,20 +73,41 @@ def free_cycle(overrides):
 
 
 def contact_test(obj, overrides):
-    """Prova di stabilita' del contatto su obj ('rigid' | 'soft')."""
+    """Prova di contatto su obj ('rigid' | 'soft'): restituisce (metriche, cronologia)."""
     P = {**NOMINAL_PARAMS, **overrides}
-    o = {"contact_object": obj, "auto_stop_force": P["contact_stop_force"],
-         "auto_rate": P["contact_rate"], **overrides}
-    root, ctrl, n, elapsed, timed_out = simulate(
-        o, hold_s=P["contact_settle_s"] + P["hold_duration"], stop_after_hold=True)
+    o = {**overrides, "contact_object": obj, "auto_rate": P["contact_rate"]}
+    root, ctrl, n, elapsed, timed_out = simulate(o, stop_after_hold=True)
     h = {k: list(v) for k, v in ctrl.history.items()}
-    out = contact_stability(h["t"], h["F_contact"], h["phase"], duration=P["hold_duration"],
-                            ptp_max=P["stability_ptp_max"], loss_force=P["contact_loss_force"])
-    hold = [i for i, ph in enumerate(h["phase"]) if ph == "hold"]
-    out.update(
-        F_stop_N=float(h["F_contact"][hold[0]]) if hold else float("nan"),
-        T_stop_N=float(h["T"][hold[0]]) if hold else float("nan"),
-        F_hold_max_N=float(max(h["F_contact"][i] for i in hold)) if hold else float("nan"),
-        k_final=float(h["k"][-1]), steps=n, elapsed_s=elapsed, timed_out=timed_out,
-        contact_read_errors=int(ctrl.contact_read_errors))
+    t, F, T = np.array(h["t"]), np.array(h["F_contact"]), np.array(h["T"])
+    phase, contact = np.array(h["phase"]), np.array(h["contact"])
+    band = (P["force_ref"] * (1.0 - P["force_band"]), P["force_ref"] * (1.0 + P["force_band"]))
+
+    hold = np.flatnonzero(phase == "hold")
+    if hold.size >= 2:
+        out = contact_stability(t, F, phase, duration=P["hold_duration"],
+                                ptp_max=P["stability_ptp_max"],
+                                loss_force=P["contact_loss_force"], band=band)
+    else:   # la regolazione non si e' assestata entro max_time: prova non superata
+        out = {"F_mean_N": float("nan"), "F_min_N": float("nan"), "F_max_N": float("nan"),
+               "F_ptp_N": float("nan"), "ptp_over_mean": float("nan"), "contact_lost": False,
+               "hold_duration_s": 0.0, "window_complete": False, "in_band": False,
+               "stable": False}
+    out["settled"] = bool(hold.size >= 2)
+
+    det = np.flatnonzero(contact == 1)
+    if det.size:
+        i = int(det[0])
+        j = min(i + 1, len(t) - 1)            # primo passo con la k di contatto
+        end = int(hold[-1]) + 1 if hold.size else len(t)
+        out.update(t_detect_s=float(t[i]), F_detect_N=float(F[i]), T_detect_N=float(T[i]),
+                   T_after_switch_N=float(T[j]), k_contact=float(h["k"][j]),
+                   F_peak_N=float(F[i:end].max()),
+                   regulation_s=float(t[hold[0]] - t[i]) if hold.size else float("nan"))
+    else:
+        out.update(t_detect_s=float("nan"), F_detect_N=float("nan"), T_detect_N=float("nan"),
+                   T_after_switch_N=float("nan"), k_contact=float("nan"),
+                   F_peak_N=float("nan"), regulation_s=float("nan"))
+    out.update(contact_changes=int(np.count_nonzero(np.diff(contact))), steps=n,
+               elapsed_s=elapsed, timed_out=timed_out,
+               contact_read_errors=int(ctrl.contact_read_errors))
     return out, h

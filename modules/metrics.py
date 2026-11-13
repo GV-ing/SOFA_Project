@@ -1,7 +1,7 @@
 # modules/metrics.py
 """Metriche del Progetto 5 (pure, testabili senza SOFA).
 
-Isteresi H (traccia + glossario):
+Isteresi H (traccia):
     H = max |dY_load(u) - dY_unload(u)| / dY_max * 100   [%]
     confronto a pari u su un ciclo; dY_max = deflessione massima a fine carico.
     Riferimento: attuazione diretta (k = 50 N/mm) -> si riporta anche H / H_diretta.
@@ -9,6 +9,7 @@ Isteresi H (traccia + glossario):
 Stabilita' del contatto (traccia):
     forza che oscilla meno del 30% (picco-picco) rispetto alla media per 5 s,
     senza perdita di contatto.
+Forza mantenuta (assistente del corso): 5 mN +/-10 %, cioe' F in 4.5-5.5 mN in tutta la finestra.
 """
 
 import numpy as np
@@ -61,8 +62,11 @@ def hysteresis_H(u, dY, phase, n_grid=400):
     }
 
 
-def contact_stability(t, F, phase, duration=5.0, ptp_max=0.30, loss_force=1e-4):
-    """Stabilita' del contatto sugli ultimi `duration` secondi della fase 'hold'."""
+def contact_stability(t, F, phase, duration=5.0, ptp_max=0.30, loss_force=1e-4, band=None):
+    """Stabilita' del contatto sugli ultimi `duration` secondi della fase 'hold'.
+
+    band = (F_min, F_max) [N]: banda ammessa; in_band e' vero se tutta la finestra vi rientra.
+    """
     t = np.asarray(t, dtype=float)
     F = np.asarray(F, dtype=float)
     phase = np.asarray(phase)
@@ -78,13 +82,17 @@ def contact_stability(t, F, phase, duration=5.0, ptp_max=0.30, loss_force=1e-4):
     lost = bool(np.any(Fw < loss_force))
     complete = span >= duration - 2 * np.min(np.diff(t_h)) if t_h.size > 1 else False
     ratio = ptp / mean if mean > 0 else float("inf")
+    in_band = (bool(np.all((Fw >= band[0]) & (Fw <= band[1]))) if band is not None
+               else float("nan"))
     return {
         "F_mean_N": mean,
+        "F_min_N": float(np.min(Fw)),
+        "F_max_N": float(np.max(Fw)),
         "F_ptp_N": ptp,
         "ptp_over_mean": float(ratio),
         "contact_lost": lost,
         "hold_duration_s": span,
         "window_complete": bool(complete),
-        "in_range_10_50mN": bool(0.010 <= mean <= 0.050),
+        "in_band": in_band,
         "stable": bool(complete and not lost and ratio < ptp_max),
     }

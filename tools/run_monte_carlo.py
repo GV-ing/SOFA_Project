@@ -55,8 +55,10 @@ def print_summary(s):
     print("\n=== Riepilogo Monte Carlo ===")
     if s.get("H_direct_nominal_pct") is not None:
         print(f"  H attuazione diretta (nominale): {s['H_direct_nominal_pct']:.2f} %")
+    order = {"low": "0.6 libero / 4.8 in contatto", "high": "4.8 libero / 0.6 in contatto"}
     for cfg, c in s["configs"].items():
-        print(f"\n  [{cfg}]  realizzazioni con H: {c['n_realizations']}")
+        extra = f", ordine {order[s['k_free_level']]}" if cfg == "switched" and "k_free_level" in s else ""
+        print(f"\n  [{cfg}{extra}]  realizzazioni con H: {c['n_realizations']}")
         if "H_mean_pct" in c:
             print(f"    H nominale {c['H_nominal_pct']:.2f} %  media {c['H_mean_pct']:.2f} %  "
                   f"dev.std {c['H_std_pct']:.2f} %  peggiore {c['H_worst_pct']:.2f} % "
@@ -68,8 +70,13 @@ def print_summary(s):
                 print(f"    H nominale / H diretta = {c['H_nominal_over_direct']:.3f}")
         print(f"    contatto instabile: rigido {c['unstable_contact']['rigid']}, soffice "
               f"{c['unstable_contact']['soft']} (su {c['n_contact_tests']} prove)")
-        print(f"    forza fuori range 10-50 mN: rigido {c['contact_out_of_range_10_50mN']['rigid']}, "
-              f"soffice {c['contact_out_of_range_10_50mN']['soft']}")
+        print(f"    forza fuori banda 4.5-5.5 mN nella finestra: rigido "
+              f"{c['contact_out_of_band']['rigid']}, soffice {c['contact_out_of_band']['soft']}")
+        for obj in ("rigid", "soft"):
+            r, fp = c["regulation_s_max"][obj], c["F_peak_max_N"][obj]
+            if r is not None and fp is not None:
+                print(f"    {obj:5s}: regolazione dopo il rilevamento al massimo {r:.1f} s, "
+                      f"picco di F al massimo {fp * 1e3:.1f} mN")
         if "tornado" in c:
             t = c["tornado"]
             print(f"    tornado (punti di H per +20%), R^2 = {t['r2']:.3f}:")
@@ -168,7 +175,8 @@ def main():
                       flush=True)
 
     summary = analyze(results, realizations)
-    summary.update(seed=a.seed, count=a.count, tests=a.tests)
+    summary.update(seed=a.seed, count=a.count, tests=a.tests,
+                   k_free_level=NOMINAL_PARAMS["k_free_level"])
     with open(os.path.join(outdir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
     print_summary(summary)

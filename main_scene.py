@@ -8,7 +8,7 @@ import Sofa.Core
 # Aggiunge la directory corrente al path per importare il package 'modules'
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
-from modules.config import NOMINAL_PARAMS
+from modules.config import NOMINAL_PARAMS, SPRING_CONFIGS
 from modules.geometry_gen import (
     box_hexa_mesh,
     box_surface,
@@ -55,12 +55,9 @@ def createScene(rootNode, custom_params=None):
             params["contact_object"] = obj
         spring = os.environ.get("P5_SPRING")
         if spring:
-            springs = {"fixed": {"switched_mode": False},
-                       "switched": {"switched_mode": True},
-                       "direct": {"switched_mode": False, "k_spring": params["k_direct"]}}
-            if spring not in springs:
+            if spring not in SPRING_CONFIGS:
                 raise ValueError("P5_SPRING deve essere 'fixed', 'switched' oppure 'direct'")
-            params.update(springs[spring])
+            params.update(SPRING_CONFIGS[spring])
         order = os.environ.get("P5_K_FREE")
         if order:
             if order not in ("high", "low"):
@@ -71,7 +68,8 @@ def createScene(rootNode, custom_params=None):
                         else (params["k_low"], params["k_high"]))
             print(f"[GUI] molla a due livelli: {k_f} N/mm in moto libero, {k_c} N/mm in contatto")
         print(f"[GUI] oggetto: {params['contact_object']} | molla: "
-              f"{'due livelli 0.6/4.8 N/mm' if params['switched_mode'] else str(params['k_spring']) + ' N/mm'}")
+              f"{'due livelli 0.6/4.8 N/mm' if params['switched_mode'] else str(params['k_spring']) + ' N/mm'}"
+              f" | forza in contatto {params['force_ref'] * 1e3:g} mN +/-{params['force_band'] * 100:g} %")
     if custom_params is not None:
         params.update(custom_params)
     # Con la vista amplificata (solo GUI) la forma reale resta visibile in trasparenza

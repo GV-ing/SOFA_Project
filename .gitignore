@@ -3,3 +3,6 @@ __pycache__/
 *.csv
 meshes/tube_fem_surface.obj
 meshes/tube_collision.obj
+meshes/scena/
+*.log
+nohup.out

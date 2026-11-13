@@ -93,7 +93,8 @@ def analyze(results, realizations):
     summary["H_direct_nominal_pct"] = H_direct
     for cfg in SPRING_CONFIGS:
         nominal = ok.get((NOMINAL, cfg, "free"), {}).get("H_pct")
-        H, D, unstable, out_of_range, used = [], [], {"rigid": 0, "soft": 0}, {"rigid": 0, "soft": 0}, []
+        H, D, unstable, out_of_band, used = [], [], {"rigid": 0, "soft": 0}, {"rigid": 0, "soft": 0}, []
+        reg_s, F_peak = {"rigid": [], "soft": []}, {"rigid": [], "soft": []}
         for r in realizations:
             key = (r["realization"], cfg)
             if (key + ("free",)) in ok:
@@ -105,7 +106,11 @@ def analyze(results, realizations):
                 if m is None:
                     continue
                 unstable[obj] += 0 if m["stable"] else 1
-                out_of_range[obj] += 0 if m["in_range_10_50mN"] else 1
+                out_of_band[obj] += 0 if m["in_band"] else 1
+                for store, name in ((reg_s, "regulation_s"), (F_peak, "F_peak_N")):
+                    v = m.get(name)
+                    if v is not None and np.isfinite(v):
+                        store[obj].append(float(v))
         c = {"n_realizations": len(H), "H_nominal_pct": nominal}
         if H:
             Ha = np.array(H)
@@ -123,7 +128,10 @@ def analyze(results, realizations):
                                             for row in c["tornado"]["coefficients"][:2]]
         c["unstable_contact"] = unstable
         c["unstable_total"] = unstable["rigid"] + unstable["soft"]
-        c["contact_out_of_range_10_50mN"] = out_of_range
+        c["contact_out_of_band"] = out_of_band
+        # transitorio dopo il rilevamento (prima della finestra): durata massima e picco di F
+        c["regulation_s_max"] = {o: max(v) if v else None for o, v in reg_s.items()}
+        c["F_peak_max_N"] = {o: max(v) if v else None for o, v in F_peak.items()}
         n_contact = sum(1 for r in realizations for o in ("rigid", "soft")
                         if (r["realization"], cfg, o) in ok)
         c["n_contact_tests"] = n_contact
