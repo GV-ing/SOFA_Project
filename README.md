@@ -25,7 +25,7 @@ traccia nomina; in `modules/config.py` ogni valore riporta l'origine: traccia, a
 | 2. Verifica della mesh | `python3.12 -u tools/mesh_convergence.py` | decine di minuti | tabella ΔY SOFA / teoria della trave |
 | 3. Scena interattiva | `./run_gui.sh` | – | GUI, grafici live, `results/gui_<data>.csv` |
 | 4. Prove nominali | `python3.12 -u tools/run_cycle.py --free --contact` | circa 1 ora | `results/nominali/*.csv`, `*.json` |
-| 5. Monte Carlo | `python3.12 -u tools/run_monte_carlo.py --outdir results/mc_finale` | diverse ore | `results/mc_finale/` |
+| 5. Monte Carlo | `python3.12 -u tools/run_monte_carlo.py --outdir results/mc_finale` | circa 5.5 ore (3 processi) | `results/mc_finale/` |
 | 6. Figure | `env -u PYTHONPATH python3 tools/make_figures.py` | secondi | `results/figures/*.png` |
 
 La scena rigenera le sue mesh a ogni avvio e il Monte Carlo contiene già i casi nominali delle
@@ -197,9 +197,51 @@ contatto (1 mm di motore cambia la forza di circa 0.6 mN sul soffice, contro cir
 passa da circa 5 a circa 35 N in un passo e la forza sul soffice arriva a 44 mN. Il difetto
 dell'ordine scelto è allo scarico, quando il contatto si perde (vedi i limiti).
 
-### Monte Carlo
+### Monte Carlo (`results/mc_finale`, seed 2026, 127 casi, 14 novembre 2026)
 
-Da aggiornare con la campagna `results/mc_finale` (configurazioni fissa e 4.8 → 0.6).
+Nessun caso fallito; 16.6 ore di calcolo complessive, divise su 3 processi.
+
+| | (a) fissa 1.2 N/mm | (b) 4.8 libero / 0.6 in contatto |
+|---|---:|---:|
+| H nominale [% di ΔYmax] | 14.39 | 12.42 |
+| H medio ± dev. std | 15.10 ± 1.78 | 12.00 ± 1.27 |
+| H caso peggiore | 18.09 (r19) | 14.84 (r02) |
+| Indice di robustezza (peggiore / nominale) | 1.257 | **1.195** |
+| H nominale / H attuazione diretta (21.26 %) | 0.68 | **0.58** |
+| Contatti instabili (rigido + soffice, su 40) | 0 | 0 |
+| Prove con F fuori dalla banda 4.5–5.5 mN nella finestra | 0 | 0 |
+| Due parametri dominanti (tornado, R² 1.000 / 0.998) | F_h molla (+1.86), F_h materiale (+1.66) | k (+1.45), F_h molla (−0.84) |
+| Target (indice ≤ 1.3 e 20/20 contatti stabili) | raggiunto | **raggiunto** |
+
+I coefficienti del tornado sono la variazione di H, in punti percentuali, per una perturbazione
+di +20 % del parametro. La configurazione più robusta è la **(b)**: indice di robustezza più
+basso e H più bassa sia in media sia nel caso peggiore.
+
+**Lettura del tornado.**
+- E, c e y_t sono ininfluenti (|coefficiente| ≤ 0.03). H è normalizzata su ΔYmax e il picco di T
+  è sempre 10 N: E e y_t scalano allo stesso modo carico e scarico (il rapporto E_load/E_unload
+  non cambia), c agisce sulla velocità del tendine, che è piccola.
+- Nella (a) più isteresi (F_h molla, F_h materiale) vuol dire più H: lo scarto massimo è a T bassa,
+  dove domina l'isteresi di Dahl.
+- Nella (b) il segno delle isteresi si inverte e domina k. Con 4.8 N/mm lo scarto massimo è dove
+  lo scarico, più cedevole per E_unload, sta sopra il carico; l'isteresi di Dahl lo riporta giù e
+  quindi riduce H, mentre con una molla più rigida la corsa in u si accorcia e l'effetto di
+  E_unload pesa di più (interpretazione ricavata dai cicli nominali). La robustezza della (b) nasce in parte da questa compensazione tra le due isteresi.
+
+**Prove di contatto** (84 prove, nominali comprese): F nella finestra tra 4.90 e 5.30 mN,
+picco-picco / media ≤ 0.006, nessuna perdita di contatto, un solo cambio di stato per prova.
+
+| | Regolazione + 1 s di assestamento | Picco di F dopo il rilevamento |
+|---|---|---|
+| (a) rigido | 1.2–1.3 s | ≤ 10.9 mN |
+| (a) soffice | 1.0 s (nessuna correzione) | ≤ 5.0 mN |
+| (b) rigido | 1.0–1.2 s | ≤ 16.0 mN |
+| (b) soffice | 4.0–7.7 s | ≤ 5.1 mN |
+
+**Ordine scartato (b) 0.6 libero / 4.8 in contatto** (solo nominale, `results/nominali`):
+H = 16.0 %; sul rigido picco di 20.6 mN e regolazione di 1.4 s; sul soffice T sale da 5.15 a
+35.3 N alla commutazione, la forza arriva a 43.2 mN e la regolazione dura 6.9 s. Stabile e nella
+banda anche così, ma con H più alta e un gradino di forza molto più violento.
 
 ## Requisiti della traccia
 
@@ -258,3 +300,5 @@ results/               nominali/, mc_finale/, figures/ (create dai passi 4, 5 e 
 - **Perdita del contatto con l'ordine scelto:** allo scarico, quando il contatto si perde, k torna da 0.6 a 4.8 N/mm a pari allungamento e T risale di colpo (da circa 0.25 a circa 8 N sul soffice), così la punta ritocca brevemente l'oggetto. Avviene dopo la finestra di valutazione e non entra nelle metriche; nel ciclo autonomo un nuovo rilevamento durante lo scarico non riattiva la regolazione.
 - **Passaggio E_load → E_unload istantaneo:** all'inversione del motore la punta si sposta di colpo (circa +18 % di cedevolezza).
 - **Smorzamento c quasi ininfluente su H:** agisce sulla velocità del tendine, che è piccola perché il tubo è rigido.
+- **La stabilità del contatto discrimina poco:** nella finestra il motore è fermo e il modello è quasi statico, quindi il rapporto picco-picco / media resta sotto 0.006 contro il limite di 0.30. Il criterio più severo è la banda 4.5–5.5 mN.
+- **Parametri incerti fissi:** gap punta–oggetto (0.03 mm) e soglia di 5 mN non sono perturbati. L'ordine scelto per la molla (b) richiede un gap piccolo: con 0.1 mm, secondo il modello ridotto, dopo la commutazione T non basterebbe più a mantenere il contatto.

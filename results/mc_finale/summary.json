@@ -1,0 +1,153 @@
+{
+  "failed_cases": [],
+  "configs": {
+    "fixed": {
+      "n_realizations": 20,
+      "H_nominal_pct": 14.387826686668092,
+      "H_mean_pct": 15.10201535960189,
+      "H_std_pct": 1.7778645871524537,
+      "H_worst_pct": 18.08823716370847,
+      "worst_realization": "r19",
+      "robustness_index": 1.257190370556049,
+      "H_nominal_over_direct": 0.6767437576082846,
+      "tornado": {
+        "intercept": 14.366964340190986,
+        "r2": 0.9997923020223792,
+        "coefficients": [
+          {
+            "parameter": "Fh_spring",
+            "coef_pct_per_20pct": 1.862596269559665,
+            "standardized": 0.7647949490234867
+          },
+          {
+            "parameter": "Fh_mat",
+            "coef_pct_per_20pct": 1.6556075320742771,
+            "standardized": 0.7369080665378218
+          },
+          {
+            "parameter": "k",
+            "coef_pct_per_20pct": -0.590303484149473,
+            "standardized": -0.2501665579250239
+          },
+          {
+            "parameter": "E",
+            "coef_pct_per_20pct": 0.023424842055192796,
+            "standardized": 0.00960027195575815
+          },
+          {
+            "parameter": "c",
+            "coef_pct_per_20pct": -0.013143918311884745,
+            "standardized": -0.0058464773112648985
+          },
+          {
+            "parameter": "yt",
+            "coef_pct_per_20pct": -0.0022031105091164793,
+            "standardized": -0.0008994607084991945
+          }
+        ]
+      },
+      "dominant_parameters": [
+        "Fh_spring",
+        "Fh_mat"
+      ],
+      "unstable_contact": {
+        "rigid": 0,
+        "soft": 0
+      },
+      "unstable_total": 0,
+      "contact_out_of_band": {
+        "rigid": 0,
+        "soft": 0
+      },
+      "regulation_s_max": {
+        "rigid": 1.320000000000001,
+        "soft": 0.9999999999999993
+      },
+      "F_peak_max_N": {
+        "rigid": 0.010942194525817083,
+        "soft": 0.0050446827900231545
+      },
+      "n_contact_tests": 40,
+      "meets_target": true
+    },
+    "switched": {
+      "n_realizations": 20,
+      "H_nominal_pct": 12.419679188908068,
+      "H_mean_pct": 11.998989498785654,
+      "H_std_pct": 1.2709325469816675,
+      "H_worst_pct": 14.841736516000196,
+      "worst_realization": "r02",
+      "robustness_index": 1.195017704584129,
+      "H_nominal_over_direct": 0.5841702534809627,
+      "tornado": {
+        "intercept": 12.462743724897795,
+        "r2": 0.9975369896864268,
+        "coefficients": [
+          {
+            "parameter": "k",
+            "coef_pct_per_20pct": 1.4540506632361536,
+            "standardized": 0.8620046789805575
+          },
+          {
+            "parameter": "Fh_spring",
+            "coef_pct_per_20pct": -0.8406728254700089,
+            "standardized": -0.48286916066718943
+          },
+          {
+            "parameter": "Fh_mat",
+            "coef_pct_per_20pct": -0.7358306326994404,
+            "standardized": -0.45815239210445124
+          },
+          {
+            "parameter": "E",
+            "coef_pct_per_20pct": 0.01971122635396516,
+            "standardized": 0.011300474708031133
+          },
+          {
+            "parameter": "c",
+            "coef_pct_per_20pct": 0.01684305408801101,
+            "standardized": 0.010480124415424499
+          },
+          {
+            "parameter": "yt",
+            "coef_pct_per_20pct": -0.013433323863444202,
+            "standardized": -0.0076719467116107415
+          }
+        ]
+      },
+      "dominant_parameters": [
+        "k",
+        "Fh_spring"
+      ],
+      "unstable_contact": {
+        "rigid": 0,
+        "soft": 0
+      },
+      "unstable_total": 0,
+      "contact_out_of_band": {
+        "rigid": 0,
+        "soft": 0
+      },
+      "regulation_s_max": {
+        "rigid": 1.2300000000000009,
+        "soft": 7.679999999999865
+      },
+      "F_peak_max_N": {
+        "rigid": 0.016007449991860642,
+        "soft": 0.005112849240946488
+      },
+      "n_contact_tests": 40,
+      "meets_target": true
+    }
+  },
+  "H_direct_nominal_pct": 21.26037591763958,
+  "most_robust_config": "switched",
+  "seed": 2026,
+  "count": 20,
+  "tests": [
+    "free",
+    "rigid",
+    "soft"
+  ],
+  "k_free_level": "high"
+}

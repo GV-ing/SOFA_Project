@@ -6,3 +6,4 @@ meshes/tube_collision.obj
 meshes/scena/
 *.log
 nohup.out
+*.zip
