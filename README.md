@@ -1,304 +1,276 @@
-# Progetto 5 — Incertezza parametrica: Monte Carlo e analisi di sensibilità
+# Progetto 5: incertezza parametrica, Monte Carlo e analisi di sensibilità
 
-Robotica Medica 2026/27 (prof.ssa F. Ficuciello). Tubo in nitinol azionato da un tendine con
-molla in serie, simulato in **SOFA v26.06 (SofaPython3, Python 3.12) su Ubuntu 22.04**.
+Robotica Medica, A.A. 2026/27, prof.ssa F. Ficuciello
 
-Si confrontano due configurazioni della molla: **(a)** fissa con k = 1.2 N/mm e **(b)** a due
-livelli, **4.8 N/mm in moto libero e 0.6 N/mm in contatto** (`k_free_level = "high"` in
-`modules/config.py`). Il contatto è rilevato a 5 mN; da quel momento k commuta istantaneamente
-e il motore mantiene la forza di contatto a **5 mN ±10 % (4.5–5.5 mN)** per tutta la durata del
-contatto. Per ogni configurazione si simulano il caso nominale e 20 realizzazioni con i parametri
-perturbati del ±(10–20) % con segno casuale; su ognuna si calcolano l'isteresi H e la stabilità
-del contatto, e una regressione lineare dà il diagramma tornado.
+Il progetto simula in SOFA un tubo in nitinol che viene piegato da un tendine, con una molla in
+serie tra il motore e il tendine. L'obiettivo è capire quanto l'isteresi del sistema e la
+stabilità del contatto con un oggetto risentono dell'incertezza sui parametri, e quali parametri
+pesano di più.
 
-Riferimento per i requisiti: la traccia del Progetto 5 (PDF del corso) e le indicazioni
-dell'assistente del corso (forza di contatto mantenuta a 5 mN ±10 %, nessun vincolo su T,
-commutazione di k istantanea). Il glossario del corso serve solo a quantificare grandezze che la
-traccia nomina; in `modules/config.py` ogni valore riporta l'origine: traccia, assistente o scelta.
+Si confrontano due molle:
 
-## Pipeline completa
+- (a) molla fissa con k = 1.2 N/mm;
+- (b) molla a due livelli, 4.8 N/mm in moto libero e 0.6 N/mm in contatto. Il cambio avviene
+  appena la forza di contatto raggiunge 5 mN.
 
-| Passo | Comando | Durata indicativa | Produce |
-|---|---|---|---|
-| 0. Ambiente | `source env.sh` | – | variabili di SOFA per `python3.12` |
-| 1. Mesh | `python3.12 tools/generate_meshes.py` | secondi | `meshes/*.obj`, `meshes/*.vtk` |
-| 2. Verifica della mesh | `python3.12 -u tools/mesh_convergence.py` | decine di minuti | tabella ΔY SOFA / teoria della trave |
-| 3. Scena interattiva | `./run_gui.sh` | – | GUI, grafici live, `results/gui_<data>.csv` |
-| 4. Prove nominali | `python3.12 -u tools/run_cycle.py --free --contact` | circa 1 ora | `results/nominali/*.csv`, `*.json` |
-| 5. Monte Carlo | `python3.12 -u tools/run_monte_carlo.py --outdir results/mc_finale` | circa 5.5 ore (3 processi) | `results/mc_finale/` |
-| 6. Figure | `env -u PYTHONPATH python3 tools/make_figures.py` | secondi | `results/figures/*.png` |
+Per ciascuna si simulano il caso nominale e 20 realizzazioni con parametri perturbati a caso. Da
+queste si ricavano media, deviazione standard e caso peggiore dell'isteresi H, il numero di
+contatti instabili e un diagramma tornado che ordina i parametri per influenza.
 
-La scena rigenera le sue mesh a ogni avvio e il Monte Carlo contiene già i casi nominali delle
-configurazioni (a) e (b): il minimo per rifare i risultati è 0 → 5 → 6. Il passo 4 serve anche
-per l'ordine della molla (b) non scelto (`--kfree low`), simulato solo nel caso nominale.
+Ambiente: Ubuntu 22.04, SOFA v26.06 (binario per Python 3.12, con SofaPython3 e SoftRobots).
 
-### 0. Installazione e ambiente
+## Il modello
 
-Prerequisiti:
-- SOFA v26.06 (binario per Python 3.12) in `~/SOFA_v26.06.00_Linux_Python3.12/`;
-- questo progetto in `~/SOFA_v26.06.00_Linux_Python3.12/SOFA_Project`;
-- il Python di sistema con matplotlib, usato per i grafici e le figure.
-
-```bash
-sudo apt install python3-matplotlib python3-tk
-cd ~/SOFA_v26.06.00_Linux_Python3.12/SOFA_Project
-chmod +x run_gui.sh
-source env.sh                                    # va ripetuto in ogni nuovo terminale
-python3.12 -c "import Sofa.Core, Sofa.Simulation; print('SOFA OK')"     # atteso: SOFA OK
+```
+motore (u) ──[ molla: k, c, isteresi ]── tendine (u1) ──► tubo in nitinol ──► oggetto
 ```
 
-`env.sh` e `run_gui.sh` danno per scontati i percorsi indicati sopra. Se SOFA si trova altrove,
-basta correggere `SOFA_ROOT` in `env.sh`, oppure lanciare `SOFA_ROOT=/percorso ./run_gui.sh`.
+Il tubo ha diametro esterno 1.93 mm, spessore 0.22 mm e lunghezza 100 mm. I primi 40 mm
+(l'albero) sono bloccati, gli ultimi 60 si flettono. La meccanica usa `TetrahedronFEMForceField`
+su una mesh di tetraedri con 3720 nodi, più fitta nella parte flessibile (passo assiale 0.4 mm).
+Il modulo di Young vale 77 GPa in carico e 65 GPa in scarico, e il controller lo cambia quando il
+motore inverte il verso. I modelli visivo e di collisione sono superfici OBJ collegate alla mesh
+con `BarycentricMapping`; quella di collisione copre solo il tratto finale, vicino all'oggetto.
 
-### 1. Generazione delle mesh
+Il tendine è un `CableConstraint` comandato in forza, a 0.6 mm dall'asse del tubo e ancorato alla
+punta.
 
-```bash
-python3.12 tools/generate_meshes.py
+La molla trasmette al tendine una tensione che dipende dal suo allungamento ΔLs = u − u1, dove u
+è la posizione del motore e u1 lo spostamento del tendine:
+
+```
+T = max(0,  k·ΔLs  +  z·(Fh_molla + Fh_mat)  −  c·du1/dt)
 ```
 
-| File | Contenuto |
-|---|---|
-| `meshes/tube_surface.obj` | superficie del tubo, modello visivo |
-| `meshes/tube_collision.obj` | superficie del tubo, modello di collisione (solo il tratto vicino alla punta) |
-| `meshes/tube_fem_surface.obj` | superficie esterna della mesh FEM (controllo) |
-| `meshes/tube_volume.vtk` | mesh volumetrica del tubo: 3720 nodi, 11088 tetraedri, più fine (0.4 mm) nella parte flessibile |
-| `meshes/soft_volume.vtk` | mesh volumetrica dell'oggetto soffice: 432 esaedri, più fini nella zona di contatto |
-| `meshes/object_surface.obj` | superficie dell'oggetto di contatto |
+z è lo stato di un modello di isteresi di Dahl: varia tra −1 e +1 e cambia segno quando il motore
+inverte (σ0 = 10 mm⁻¹). L'isteresi della molla (0.45 N) e quella del materiale (0.40 N) sono
+sommate in un unico termine da ±0.85 N. Lo smorzamento c = 1.5 N·s/mm agisce sulla velocità del
+tendine.
 
-- I file `.vtk` si aprono con ParaView.
-- Lo script usa le stesse funzioni della scena (`modules/geometry_gen.py`).
-- La scena rigenera le sue mesh a ogni avvio in `meshes/scena/` (cartella di lavoro, ignorata da
-  git) con i parametri del momento, compreso il profilo GUI più leggero. Per questo la GUI non va
-  aperta mentre girano gli script del passo 4 o il Monte Carlo.
+L'oggetto di contatto è un cubo di 20 mm affacciato alla punta, a 0.03 mm di distanza. Può essere
+rigido oppure soffice (E = 5 kPa, ν = 0.45, mesh di esaedri più fitta vicino al contatto). Il
+contatto usa `FrictionContactConstraint` con μ = 0.2.
 
-### 2. Verifica della mesh (facoltativa)
+Il contatto viene riconosciuto quando la forza supera 5 mN e si considera perso quando scende
+sotto 0.1 mN. Per tutta la sua durata la molla (b) resta a 0.6 N/mm e un regolatore muove il
+motore per tenere la forza a 5 mN ± 10 % (4.5–5.5 mN). Il regolatore interviene quando l'errore
+supera 0.3 mN e ferma il motore quando torna sotto 0.1 mN.
 
-```bash
-python3.12 -u tools/mesh_convergence.py
+## Prove e metriche
+
+Nel ciclo libero, senza oggetto, il motore carica a 1 mm/s finché la tensione arriva a 10 N (o u
+a 15 mm) e poi torna a zero. L'isteresi è la massima differenza di deflessione della punta tra
+carico e scarico a pari u, in percentuale della deflessione massima:
+
+```
+H = max |ΔY_carico(u) − ΔY_scarico(u)| / ΔY_max · 100 %
 ```
 
-Lo script prova `mesh_h_flex` = 0.8, 0.4, 0.3 e 0.2 mm. Per ciascun valore confronta la
-deflessione della punta con la teoria della trave: momento T·yt dal cavo e forza laterale in
-punta. Con 0.4 mm, il valore scelto, ΔY a 10 N vale 0.304 mm contro 0.320 mm teorici (−4.8 %).
+Il riferimento è l'attuazione diretta, cioè una molla con k = 50 N/mm (con gli stessi valori di
+isteresi e smorzamento), caricata a 0.1 mm/s.
 
-### 3. Scena interattiva (GUI)
+Nella prova di contatto, su oggetto rigido e soffice, il motore avvicina la punta a 2 mm/s. Dopo
+il rilevamento il regolatore porta la forza nella banda; si attende 1 s a motore fermo e poi si
+osserva una finestra di 5 s. Il contatto è stabile se nella finestra l'oscillazione picco-picco
+della forza resta sotto il 30 % della media e il contatto non si perde.
 
-```bash
-./run_gui.sh                                                   # soffice, molla fissa
-./run_gui.sh --object rigid --spring switched                  # rigido, molla a due livelli
-./run_gui.sh --object soft --spring switched --kfree low       # ordine non scelto
-./run_gui.sh --object none                                     # moto libero
-./run_gui.sh --spring direct                                   # attuazione diretta k = 50 N/mm
-```
+Il Monte Carlo perturba sei parametri: E (carico e scarico insieme), Fh_mat, Fh_molla, c, k (la
+molla fissa o i due livelli insieme) e y_t. In ogni realizzazione ciascuno viene moltiplicato per
+1 + δ, con |δ| uniforme tra 10 % e 20 % e segno casuale (seed 2026). Le stesse 20 realizzazioni
+valgono per le due molle. 
+In tutto sono 127 simulazioni: (1 nominale + 20) × 2 molle × 3 prove, più l'attuazione diretta.
 
-Il launcher si può lanciare da qualunque cartella e imposta l'ambiente da solo. Opzioni:
-- `--object soft|rigid|none`
-- `--spring fixed|switched|direct`
-- `--kfree high|low` (ordine dei livelli della molla b; predefinito in `config.py`)
-
-Si aprono la finestra di SOFA e quella dei grafici. Premere **Play**.
-
-| Tasto (finestra SOFA) | Moto libero | In contatto |
-|---|---|---|
-| Freccia su / `U` / `+` | carico: u + 0.35 mm | ignorato (la forza è regolata); dopo un rilascio riattiva la regolazione |
-| Freccia giù / `D` / `-` | scarico: u − 0.35 mm | rilascio: regolazione disattivata e u − 0.35 mm |
-| `R` | reset di comando e cavo | reset (la regolazione resta disattivata fino alla prossima freccia su) |
-| `M` / `A` | modo manuale ↔ ciclo autonomo | come in moto libero |
-
-Nella finestra dei grafici il tasto `R` azzera i loop e l'energia dissipata.
-
-- A ogni comando il terminale stampa u, T, ΔLs, X, Y e ΔY della punta e la forza di contatto;
-  rilevamento e perdita del contatto sono annunciati con il nuovo valore di k.
-- Ciclo autonomo (`M`): senza oggetto carica a 1 mm/s fino a T = 10 N o u = 15 mm e scarica; con
-  l'oggetto avvicina, regola la forza a 5 mN, mantiene la finestra di 5 s e scarica.
-- La finestra dei grafici segue la struttura del Modulo 06 del corso:
-  - a sinistra, il loop T–ΔLs della molla (legge di Hooke, banda ±0.85 N, energia dissipata) e il loop ΔY–u della punta con H calcolato in tempo reale;
-  - a destra, nel tempo: posizione della punta, u e ΔLs, T, forza di contatto (soglia e riferimento 5 mN, banda 4.5–5.5 mN) e k.
-- Ogni passo viene salvato in `results/gui_<data>.csv`.
-
-Da dichiarare nel video:
-- **Profilo GUI** (`gui_fast`, `gui_overrides`): mesh più leggere (`mesh_h_flex` 0.8 mm, circa l'85 % della rigidezza convergente; soffice con griglia uniforme 5) e componenti `Parallel…`. `dt` = 0.01 s e il solver dei vincoli (500 iterazioni, tolleranza 1e-7) restano quelli di consegna. Con `"gui_fast": False` la GUI usa il modello completo.
-- **Deformazione mostrata ×50** (`visual_amplification`): la forma reale resta visibile in trasparenza.
-- La simulazione va più lenta del tempo reale, quindi va dichiarato l'eventuale fattore di accelerazione del video.
-
-### 4. Prove nominali
-
-```bash
-python3.12 -u tools/run_cycle.py --free                                  # 4 cicli liberi
-python3.12 -u tools/run_cycle.py --contact --objects rigid               # 3 prove sul rigido
-python3.12 -u tools/run_cycle.py --contact --objects soft --configs switched --kfree high
-```
-
-Le prove sono indipendenti: si possono lanciare in parallelo (al massimo 3 processi nella VM),
-con `nohup … > results/nominali/<nome>.log 2>&1 &`.
-
-- **Ciclo libero** (molle fissa, due livelli nei due ordini, diretta): carico fino a T = 10 N o
-  u = 15 mm, poi scarico. Le molle vanno a 1 mm/s, la diretta a 0.1 mm/s (10 N in circa 2 s).
-- **Prova di contatto** (rigido e soffice; fissa e due livelli): avvicinamento a 2 mm/s →
-  rilevamento a 5 mN e commutazione di k → regolazione a 5 mN ±10 % → forza in banda a motore
-  fermo per 1 s → finestra di 5 s con il regolatore attivo.
-- Per ogni caso: serie temporale `results/nominali/<caso>.csv` (una riga per passo) e metriche
-  `results/nominali/<caso>.json` (H, oppure stabilità, banda, tempo di regolazione, picco di forza,
-  T prima e dopo la commutazione).
-
-### 5. Campagna Monte Carlo (127 casi)
-
-I 127 casi sono (1 nominale + 20 realizzazioni) × 2 molle (fissa e due livelli nell'ordine di
-`config.py`) × 3 prove (libera, rigido, soffice), più 1 caso di attuazione diretta. Seed 2026.
-
-```bash
-python3.12 -u tools/run_monte_carlo.py --dry-run --outdir /tmp/prova_mc     # prova senza SOFA (secondi)
-nohup python3.12 -u tools/run_monte_carlo.py --outdir results/mc_finale > results/mc_finale.log 2>&1 &
-python3.12 -u tools/run_monte_carlo.py --outdir results/mc_finale --resume   # dopo un'interruzione
-```
-
-- **Perturbazioni:** sei gruppi di parametri, ciascuno con un solo fattore: E (E_load ed E_unload), Fh_mat, Fh_spring, c, k (k_spring, k_low, k_high) e yt. La soglia di 5 mN e i guadagni del regolatore non vengono ritarati.
-- **Ripresa:** ogni caso viene aggiunto a `cases.jsonl` appena finisce, quindi `--resume` riparte dal primo caso mancante.
-- **Worker:** 3 processi (predefinito, `mc_workers`); con più processi la VM si è bloccata.
-- **Output:**
-  - `summary.json`: statistiche di H, tornado, contatti instabili, prove fuori banda, durata massima della regolazione e picco di forza dopo il rilevamento, verifica dei target;
-  - `cases.jsonl`: metriche di ogni caso;
-  - `realizations.json`: parametri estratti;
-  - `series/`: serie temporali (i `.csv` non sono in git, le figure del passo 6 sì).
-
-Riepilogo rapido dal terminale:
-
-```bash
-python3 -c "import json; s=json.load(open('results/mc_finale/summary.json'))
-for c,v in s['configs'].items(): print(c, {k: v[k] for k in ('H_nominal_pct','H_mean_pct','H_std_pct','H_worst_pct','robustness_index','unstable_total','contact_out_of_band','dominant_parameters','meets_target')})
-print('H diretta:', s['H_direct_nominal_pct'], '| piu robusta:', s['most_robust_config'])"
-```
-
-### 6. Figure
-
-```bash
-env -u PYTHONPATH python3 tools/make_figures.py --campaign results/mc_finale --out results/figures
-```
-
-Figure prodotte: `fig_tornado`, `fig_H_realizzazioni`, `fig_forze_contatto` (forza nella
-finestra e banda 4.5–5.5 mN), `fig_isteresi_nominale` (comprende l'ordine non scelto, se esiste
-`results/nominali/`) e `fig_contatto_nominale`. Lo script usa il Python di sistema (matplotlib),
-non serve SOFA.
+Il tornado viene da una regressione lineare di H sulle perturbazioni normalizzate x = δ / 20 %.
+Ogni coefficiente indica di quanti punti percentuali cambia H per una perturbazione di +20 % del
+parametro.
 
 ## Risultati
 
-### Isteresi nominale in moto libero (`results/nominali`, 13 novembre 2026)
+### Caso nominale
 
-| | H [% di ΔYmax] | H / H diretta | inversione |
-|---|---:|---:|---|
-| (b) 4.8 libero / 0.6 in contatto (scelto) | **12.42** | **0.58** | T = 10 N a u = 1.93 mm |
-| (a) fissa 1.2 N/mm | 14.39 | 0.68 | T = 10 N a u = 7.65 mm |
-| (b) 0.6 libero / 4.8 in contatto | 16.00 | 0.75 | u = 15 mm, T = 9.84 N |
-| attuazione diretta 50 N/mm | 21.26 | 1 | T = 10 N a u = 0.20 mm |
-
-**Scelta dell'ordine della molla (b).** L'ordine 4.8 → 0.6 ha la H più bassa, è cedevole in
-contatto (1 mm di motore cambia la forza di circa 0.6 mN sul soffice, contro circa 6 mN con
-4.8 N/mm) e al rilevamento la forza scende invece di salire: con l'ordine opposto la tensione
-passa da circa 5 a circa 35 N in un passo e la forza sul soffice arriva a 44 mN. Il difetto
-dell'ordine scelto è allo scarico, quando il contatto si perde (vedi i limiti).
-
-### Monte Carlo (`results/mc_finale`, seed 2026, 127 casi, 14 novembre 2026)
-
-Nessun caso fallito; 16.6 ore di calcolo complessive, divise su 3 processi.
-
-| | (a) fissa 1.2 N/mm | (b) 4.8 libero / 0.6 in contatto |
+| Molla | H | H / H diretta |
 |---|---:|---:|
-| H nominale [% di ΔYmax] | 14.39 | 12.42 |
-| H medio ± dev. std | 15.10 ± 1.78 | 12.00 ± 1.27 |
-| H caso peggiore | 18.09 (r19) | 14.84 (r02) |
-| Indice di robustezza (peggiore / nominale) | 1.257 | **1.195** |
-| H nominale / H attuazione diretta (21.26 %) | 0.68 | **0.58** |
-| Contatti instabili (rigido + soffice, su 40) | 0 | 0 |
-| Prove con F fuori dalla banda 4.5–5.5 mN nella finestra | 0 | 0 |
-| Due parametri dominanti (tornado, R² 1.000 / 0.998) | F_h molla (+1.86), F_h materiale (+1.66) | k (+1.45), F_h molla (−0.84) |
-| Target (indice ≤ 1.3 e 20/20 contatti stabili) | raggiunto | **raggiunto** |
+| (b) 4.8 libero / 0.6 in contatto | 12.4 % | 0.58 |
+| (a) fissa 1.2 N/mm | 14.4 % | 0.68 |
+| (b) ordine inverso, 0.6 libero / 4.8 in contatto | 16.0 % | 0.75 |
+| attuazione diretta 50 N/mm | 21.3 % | 1 |
 
-I coefficienti del tornado sono la variazione di H, in punti percentuali, per una perturbazione
-di +20 % del parametro. La configurazione più robusta è la **(b)**: indice di robustezza più
-basso e H più bassa sia in media sia nel caso peggiore.
+Per la molla (b) è stato scelto l'ordine 4.8 → 0.6. Oltre a dare la H più bassa, al rilevamento
+la forza scende invece di salire. Con l'ordine inverso la tensione passa di colpo da circa 5 a
+35 N e sul soffice la forza arriva a 43 mN.
 
-**Lettura del tornado.**
-- E, c e y_t sono ininfluenti (|coefficiente| ≤ 0.03). H è normalizzata su ΔYmax e il picco di T
-  è sempre 10 N: E e y_t scalano allo stesso modo carico e scarico (il rapporto E_load/E_unload
-  non cambia), c agisce sulla velocità del tendine, che è piccola.
-- Nella (a) più isteresi (F_h molla, F_h materiale) vuol dire più H: lo scarto massimo è a T bassa,
-  dove domina l'isteresi di Dahl.
-- Nella (b) il segno delle isteresi si inverte e domina k. Con 4.8 N/mm lo scarto massimo è dove
-  lo scarico, più cedevole per E_unload, sta sopra il carico; l'isteresi di Dahl lo riporta giù e
-  quindi riduce H, mentre con una molla più rigida la corsa in u si accorcia e l'effetto di
-  E_unload pesa di più (interpretazione ricavata dai cicli nominali). La robustezza della (b) nasce in parte da questa compensazione tra le due isteresi.
+![Cicli di carico e scarico nominali](results/figures/fig_isteresi_nominale.png)
 
-**Prove di contatto** (84 prove, nominali comprese): F nella finestra tra 4.90 e 5.30 mN,
-picco-picco / media ≤ 0.006, nessuna perdita di contatto, un solo cambio di stato per prova.
+### Monte Carlo
 
-| | Regolazione + 1 s di assestamento | Picco di F dopo il rilevamento |
-|---|---|---|
-| (a) rigido | 1.2–1.3 s | ≤ 10.9 mN |
-| (a) soffice | 1.0 s (nessuna correzione) | ≤ 5.0 mN |
-| (b) rigido | 1.0–1.2 s | ≤ 16.0 mN |
-| (b) soffice | 4.0–7.7 s | ≤ 5.1 mN |
+| | (a) fissa | (b) due livelli |
+|---|---:|---:|
+| H nominale | 14.39 % | 12.42 % |
+| H media ± dev. std | 15.10 ± 1.78 % | 12.00 ± 1.27 % |
+| H caso peggiore | 18.09 % (r19) | 14.84 % (r02) |
+| indice di robustezza (peggiore / nominale) | 1.26 | 1.20 |
+| contatti instabili (rigido + soffice) | 0 su 40 | 0 su 40 |
+| parametri dominanti | Fh_molla, Fh_mat | k, Fh_molla |
 
-**Ordine scartato (b) 0.6 libero / 4.8 in contatto** (solo nominale, `results/nominali`):
-H = 16.0 %; sul rigido picco di 20.6 mN e regolazione di 1.4 s; sul soffice T sale da 5.15 a
-35.3 N alla commutazione, la forza arriva a 43.2 mN e la regolazione dura 6.9 s. Stabile e nella
-banda anche così, ma con H più alta e un gradino di forza molto più violento.
+La configurazione più robusta è la (b): ha l'indice di robustezza più basso e H minore sia in
+media sia nel caso peggiore. Rispetta il target (caso peggiore entro 1.3 volte il nominale,
+contatto stabile in tutte le 20 realizzazioni), che peraltro è rispettato anche dalla (a).
 
-## Requisiti della traccia
+![Diagramma tornado](results/figures/fig_tornado.png)
 
-| Requisito | Implementazione |
-|---|---|
-| Superficie OBJ per i modelli visivo e di collisione, mesh volumetrica per la meccanica | `modules/geometry_gen.py`, `tools/generate_meshes.py` (passo 1) |
-| FEM con E diverso in carico e scarico | `TetrahedronFEMForceField`; il controller passa da E_load a E_unload secondo il verso del motore (`reinit()`) |
-| `BarycentricMapping`, `CableConstraint` | `main_scene.py`: tendine con yt = 0.6 mm, ancorato alla punta |
-| Molla in serie T = k·ΔLs ± isteresi, con smorzamento | `modules/spring_model.py`: isteresi di Dahl (σ0 = 10/mm, ±(Fh_mat + Fh_spring)), smorzamento c sul moto del tendine; solo T ≥ 0, nessun altro vincolo su T |
-| Molla a due livelli commutata dal rilevamento del contatto (5 mN) | `modules/contact_control.py: ContactState` (CONTATTO a F ≥ 5 mN, LIBERO a F < 0.1 mN); k fisso per tutto il contatto, commutazione istantanea |
-| Forza di contatto mantenuta a 5 mN ±10 % (assistente) | `modules/contact_control.py: ForceRegulator` (banda morta, dT/dt proporzionale all'errore) |
-| Controller da tastiera (su, giù, reset, manuale/autonomo, stampa u, T, ΔLs, punta) | `modules/controller.py` (`Sofa.Core.Controller`) |
-| Grafici in tempo reale + CSV | `tools/live_plot_viewer.py`, `modules/live_plot.py` (passo 3) |
-| Oggetti rigido e soffice (5 kPa, ν 0.45), `FrictionContactConstraint` μ = 0.2 | `main_scene.py`; stessa distanza iniziale (0.03 mm) per i due oggetti |
-| H = max ΔY carico−scarico a pari u, in % di ΔYmax, rispetto a k = 50 N/mm | `modules/metrics.py: hysteresis_H`; caso `direct` |
-| Contatto stabile: picco-picco < 30 % della media per 5 s, senza perdita | `modules/metrics.py: contact_stability` (verifica anche la banda 4.5–5.5 mN) |
-| 2 configurazioni × 20 realizzazioni ±(10–20) %, commutazione non ritarata | `modules/monte_carlo.py`, `tools/run_monte_carlo.py` (passo 5) |
-| Media, dev. std, caso peggiore, indice di robustezza, tornado, contatti instabili | `results/mc_finale/summary.json`, `tools/make_figures.py` (passo 6) |
+Nella molla fissa H cresce con l'isteresi: +1.86 punti per Fh_molla, +1.66 per Fh_mat, −0.59 per
+k. Nel modello le due isteresi formano un unico termine, quindi i loro coefficienti stanno nello
+stesso rapporto dei valori nominali (0.45 / 0.40). In pratica il parametro che conta è l'ampiezza
+totale dell'isteresi.
 
-## Struttura
+Nella molla a due livelli domina k (+1.45), mentre le isteresi hanno segno negativo (−0.84 e
+−0.74). Con la molla rigida in moto libero, l'isteresi di Dahl e la differenza tra E di carico e
+di scarico spostano il ramo di scarico in versi opposti e in parte si compensano. E, c e y_t non
+hanno un effetto misurabile in nessuna delle due molle (coefficienti sotto 0.03 punti). La
+regressione spiega quasi tutta la variabilità (R² = 0.9998 per la (a), 0.998 per la (b)).
 
-```text
-main_scene.py          scena SOFA (createScene); profilo GUI se lanciata da runSofa
-run_gui.sh, env.sh     launcher della GUI / ambiente per gli script python3.12
-meshes/                mesh nominali (passo 1); meshes/scena/ = mesh di lavoro della scena
-modules/
-  config.py            parametri nominali con l'origine di ogni valore, configurazioni della molla,
-                       gruppi incerti, profilo GUI
-  geometry_gen.py      mesh del tubo e dell'oggetto, export OBJ e VTK
-  spring_model.py      molla in serie: Dahl, smorzamento, k fisso o a due livelli
-  contact_control.py   stato di contatto (macchina a stati) e regolatore della forza
-  controller.py        controller da tastiera e ciclo autonomo, registrazione dei dati
-  contact_force.py     forza di contatto da constraintForces del solver
-  metrics.py           H, stabilità del contatto e banda di forza
-  protocols.py         ciclo libero e prova di contatto (usati da run_cycle e Monte Carlo)
-  monte_carlo.py       campionamento, regressione e tornado, riepilogo
-  mc_worker.py         esecuzione di un caso del Monte Carlo
-  live_plot.py         invio dei dati ai grafici, registrazione CSV (solo GUI)
-  amplified_view.py    vista della deformazione amplificata (solo GUI)
-tools/                 generate_meshes, mesh_convergence, run_cycle, run_monte_carlo,
-                       make_figures, live_plot_viewer
-results/               nominali/, mc_finale/, figures/ (create dai passi 4, 5 e 6)
+![H nelle 20 realizzazioni](results/figures/fig_H_realizzazioni.png)
+
+In tutte le 84 prove di contatto, nominali comprese, la forza nella finestra resta tra 4.90 e
+5.30 mN, l'oscillazione picco-picco è sotto lo 0.6 % della media e il contatto non si perde mai.
+Il transitorio subito dopo il rilevamento è misurato a parte. Sul rigido il picco di forza arriva
+a circa 11 mN con la molla fissa e 16 mN con quella a due livelli; sul soffice resta intorno a
+5 mN. Con la molla (b) sul soffice la regolazione dura fino a 7.7 s, perché a 0.6 N/mm il motore
+deve fare molta più corsa per recuperare la tensione.
+
+![Forza di contatto nella finestra di 5 s](results/figures/fig_forze_contatto.png)
+
+## Struttura del repository
+
 ```
+main_scene.py            scena SOFA (createScene)
+run_gui.sh               avvio della GUI con le opzioni --object, --spring, --kfree
+env.sh                   variabili d'ambiente per gli script python3.12
+modules/
+  config.py              parametri nominali, configurazioni della molla, parametri incerti
+  geometry_gen.py        mesh del tubo e dell'oggetto (OBJ e VTK)
+  spring_model.py        molla in serie con isteresi di Dahl e smorzamento
+  contact_control.py     rilevamento del contatto e regolatore di forza
+  controller.py          controller da tastiera e ciclo autonomo
+  contact_force.py       lettura della forza di contatto dal constraint solver
+  metrics.py             calcolo di H e della stabilità del contatto
+  protocols.py           ciclo libero e prova di contatto
+  monte_carlo.py         campionamento, regressione, statistiche
+  mc_worker.py           esecuzione di un singolo caso del Monte Carlo
+  live_plot.py           grafici in tempo reale e registrazione CSV (solo GUI)
+  amplified_view.py      deformazione ingrandita (solo GUI)
+tools/
+  generate_meshes.py     genera le mesh in meshes/
+  mesh_convergence.py    confronto con la teoria della trave al variare della mesh
+  run_cycle.py           casi nominali
+  run_monte_carlo.py     campagna Monte Carlo
+  make_figures.py        figure dei risultati
+  live_plot_viewer.py    finestra dei grafici in tempo reale
+meshes/                  mesh nominali
+results/
+  nominali/              metriche dei casi nominali
+  mc_finale/             realizzazioni, risultati dei 127 casi e riepilogo
+  figures/               figure
+```
+
+## Come eseguire
+
+Servono SOFA v26.06 per Python 3.12 (con SoftRobots) e, per i grafici, il Python di sistema con
+matplotlib. Il progetto va messo nella cartella `SOFA_Project` accanto a quella di SOFA:
+
+```bash
+sudo apt install python3-matplotlib python3-tk
+cd ~/SOFA_v26.06.00_Linux_Python3.12
+git clone https://github.com/GV-ing/RoboticaMedica_fp.git SOFA_Project
+cd SOFA_Project
+chmod +x run_gui.sh
+source env.sh        # da ripetere in ogni nuovo terminale
+```
+
+`env.sh` e `run_gui.sh` si aspettano SOFA in
+`~/SOFA_v26.06.00_Linux_Python3.12/SOFA_v26.06.00_Linux`.
+
+### Simulazione interattiva
+
+```bash
+./run_gui.sh                                   # oggetto soffice, molla fissa
+./run_gui.sh --object rigid --spring switched  # oggetto rigido, molla a due livelli
+./run_gui.sh --object none --spring direct     # moto libero, attuazione diretta
+```
+
+Le opzioni sono `--object soft|rigid|none`, `--spring fixed|switched|direct` e `--kfree high|low`
+(ordine dei livelli della molla b). Dopo l'avvio si preme Play. In runSofa i tasti arrivano alla
+scena solo tenendo premuto Ctrl:
+
+| Tasto | Azione |
+|---|---|
+| Ctrl + ↑ (oppure Ctrl + U) | carico: u + 0.35 mm |
+| Ctrl + ↓ (oppure Ctrl + D) | scarico: u − 0.35 mm |
+| Ctrl + R | reset |
+| Ctrl + M | passaggio tra comando manuale e ciclo autonomo |
+
+Quando la punta è in contatto la forza è regolata e il carico manuale viene ignorato: la freccia
+giù sospende la regolazione e la freccia su la riattiva. A ogni comando il terminale stampa u, T,
+ΔLs, la posizione della punta e la forza di contatto.
+
+Insieme a SOFA si apre una finestra con i grafici in tempo reale: a sinistra i cicli T–ΔLs della
+molla e ΔY–u della punta, con H calcolata durante la prova; a destra, nel tempo, posizione della
+punta, u e ΔLs, tensione, forza di contatto e rigidezza k. Ogni passo viene salvato in
+`results/gui_<data>.csv`.
+
+Per tenere la GUI fluida la scena usa mesh più leggere (passo 0.8 mm sul tubo) e componenti
+paralleli, mentre dt e solver restano quelli delle prove. Con `gui_fast = False` in `config.py`
+si usa il modello completo; con `visual_amplification` si può mostrare la deformazione
+ingrandita, lasciando la forma reale in trasparenza.
+
+### Prove automatiche
+
+```bash
+python3.12 tools/generate_meshes.py                          # mesh in meshes/ (pochi secondi)
+python3.12 -u tools/run_cycle.py --free --contact            # casi nominali (circa 1 ora)
+python3.12 -u tools/run_monte_carlo.py --outdir results/mc_nuovo          # circa 5.5 ore
+env -u PYTHONPATH python3 tools/make_figures.py --campaign results/mc_nuovo
+```
+
+Il Monte Carlo gira su 3 processi (si cambiano con `--workers`) e salva ogni caso appena finisce:
+se si interrompe, si riprende rilanciando lo stesso comando con `--resume`. Le figure non
+richiedono SOFA. Le serie temporali in CSV non sono nel repository e vengono rigenerate dagli
+script.
+
+La scena rigenera comunque le sue mesh a ogni avvio, in una cartella di lavoro comune: meglio non
+aprire la GUI mentre girano gli script.
 
 ## Ipotesi e limiti
 
-- **Unità:** mm, N, s, MPa, massa in tonnellate.
-- **Convenzione SOFA:** con `FreeMotionAnimationLoop`, valore del cavo e forze di vincolo sono impulsi, quindi si impone T·dt e si legge λ/dt.
-- **Forza di contatto:** si legge dalle `constraintForces` del `BlockGaussSeidelConstraintSolver`, perché il `lambda` dei modelli di collisione mappati conta la forza due volte.
-- **Glossario contro traccia:** dove i valori differiscono (E_unload 66 contro 65 GPa, ν 0.30 contro 0.33, k 1.13 contro 1.2 N/mm, parete 0.215 contro 0.22 mm) si sono usati i valori della traccia.
-- **Mesh del soffice non del tutto convergente:** dimezzando il passo la forza cambia di circa −15 %. I confronti tra configurazioni restano validi; le forze assolute sul soffice sono approssimate.
-- **Due isteresi di segno opposto in H:** l'isteresi di Dahl porta lo scarico sotto il carico (fino a 1.7 N di T), il passaggio a E_unload lo porta sopra (+18 % di cedevolezza). La prima domina a T bassa, la seconda a T alta: con le molle rigide e con la diretta l'anello si incrocia, e con 4.8 N/mm i due effetti si compensano in parte.
-- **Ritardo dinamico del tubo:** con `rayleighStiffness` = 0.1 la punta segue T con circa 0.1 s di ritardo (misurato: −15 µm nel carico a 4.8 N/s). H dipende quindi in parte dalla velocità di variazione di T (1.2 N/s per la fissa, circa 5 N/s per 4.8 N/mm e per la diretta). Compensando il ritardo, H vale circa 16.9 % (fissa), 17.2 % (0.6 → 4.8) e 15.3 % (4.8 → 0.6): la graduatoria tra le molle non cambia.
-- **Transitorio dopo il rilevamento:** la forza esce dalla banda per un tempo breve, per due motivi. Al primo contatto con il rigido la forza nasce già a 7.7–14 mN, perché il tubo in moto libero è in ritardo e tocca l'oggetto con T già a 0.9–1.3 N. Alla commutazione di k la forza salta (in giù con l'ordine scelto, fino a circa 1 mN sul soffice). La banda è verificata nella finestra di 5 s; durata del transitorio e picco di forza sono riportati a parte (`regulation_s`, `F_peak_N`).
-- **Regolatore di forza:** in contatto la forza segue T entro 1–2 passi (misurato in SOFA), quindi si usa `force_gain` = 1000 s⁻¹ (sul rigido force_gain · dF/dT · dt = 0.15). Una correzione continua (PI) andrebbe in ciclo limite per l'isteresi di Dahl (circa 1.7 N di T a ogni inversione del motore): per questo il regolatore ferma il motore quando la forza è entro 0.1 mN dal riferimento e riparte solo se se ne allontana di più di 0.3 mN.
-- **Perdita del contatto con l'ordine scelto:** allo scarico, quando il contatto si perde, k torna da 0.6 a 4.8 N/mm a pari allungamento e T risale di colpo (da circa 0.25 a circa 8 N sul soffice), così la punta ritocca brevemente l'oggetto. Avviene dopo la finestra di valutazione e non entra nelle metriche; nel ciclo autonomo un nuovo rilevamento durante lo scarico non riattiva la regolazione.
-- **Passaggio E_load → E_unload istantaneo:** all'inversione del motore la punta si sposta di colpo (circa +18 % di cedevolezza).
-- **Smorzamento c quasi ininfluente su H:** agisce sulla velocità del tendine, che è piccola perché il tubo è rigido.
-- **La stabilità del contatto discrimina poco:** nella finestra il motore è fermo e il modello è quasi statico, quindi il rapporto picco-picco / media resta sotto 0.006 contro il limite di 0.30. Il criterio più severo è la banda 4.5–5.5 mN.
-- **Parametri incerti fissi:** gap punta–oggetto (0.03 mm) e soglia di 5 mN non sono perturbati. L'ordine scelto per la molla (b) richiede un gap piccolo: con 0.1 mm, secondo il modello ridotto, dopo la commutazione T non basterebbe più a mantenere il contatto.
+- La gravità è trascurata.
+- Le due isteresi sono un unico termine di Dahl, calcolato sullo spostamento del motore: nel
+  tornado non si possono separare.
+- Lo smorzamento agisce sulla velocità del tendine, che è piccola perché il tubo è molto rigido;
+  per questo c ha un effetto trascurabile su H.
+- Il passaggio da E di carico a E di scarico è istantaneo all'inversione del motore e provoca un
+  piccolo scatto della punta.
+- Per lo smorzamento numerico (`rayleighStiffness` = 0.1) la punta segue la tensione con circa
+  0.1 s di ritardo, quindi H dipende un po' dalla velocità con cui cresce T, che cambia da molla a
+  molla. Correggendo il ritardo l'ordine tra le molle non cambia.
+- Con il passo di mesh scelto la deflessione a 10 N differisce di circa il 5 % dalla teoria della
+  trave (0.304 contro 0.320 mm). La mesh dell'oggetto soffice non è del tutto convergente, quindi
+  le forze assolute sul soffice sono indicative (circa 15 %); i confronti tra configurazioni
+  restano validi.
+- La stabilità è valutata a regolazione finita, con il motore quasi fermo: il rapporto
+  picco-picco / media resta molto sotto il limite, e il criterio più severo diventa la banda
+  4.5–5.5 mN. Picco di forza e durata della regolazione sono riportati a parte.
+- La distanza punta–oggetto (0.03 mm) e la soglia di 5 mN non sono perturbate. Con la molla (b)
+  una distanza molto più grande sarebbe un problema: dopo il passaggio a 0.6 N/mm la tensione cala
+  e la punta potrebbe staccarsi dall'oggetto.
+- Con la molla (b), quando in scarico il contatto si perde, k torna a 4.8 N/mm e la tensione
+  risale di colpo, così la punta ritocca l'oggetto per un attimo. Succede dopo la finestra di
+  misura e non entra nelle metriche.
+
+## Note su SOFA
+
+- Le unità sono mm, N, s e MPa; le masse sono in tonnellate.
+- Con `FreeMotionAnimationLoop` il valore del `CableConstraint` è un impulso, quindi si impone
+  T·dt.
+- La forza di contatto si legge dalle `constraintForces` del `BlockGaussSeidelConstraintSolver`,
+  divise per dt ed escludendo la riga del cavo. Il `lambda` dei modelli di collisione mappati la
+  conterebbe due volte.
