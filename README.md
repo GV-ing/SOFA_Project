@@ -1,6 +1,6 @@
 # Progetto 5: incertezza parametrica, Monte Carlo e analisi di sensibilità
 
-Robotica Medica, A.A. 2026/27, prof.ssa F. Ficuciello
+Robotica Medica, A.A. 2026/27
 
 Il progetto simula in SOFA un tubo in nitinol che viene piegato da un tendine, con una molla in
 serie tra il motore e il tendine. L'obiettivo è capire quanto l'isteresi del sistema e la
@@ -77,8 +77,8 @@ della forza resta sotto il 30 % della media e il contatto non si perde.
 Il Monte Carlo perturba sei parametri: E (carico e scarico insieme), Fh_mat, Fh_molla, c, k (la
 molla fissa o i due livelli insieme) e y_t. In ogni realizzazione ciascuno viene moltiplicato per
 1 + δ, con |δ| uniforme tra 10 % e 20 % e segno casuale (seed 2026). Le stesse 20 realizzazioni
-valgono per le due molle. 
-In tutto sono 127 simulazioni: (1 nominale + 20) × 2 molle × 3 prove, più l'attuazione diretta.
+valgono per le due molle, e né la soglia . In tutto sono 127
+simulazioni: (1 nominale + 20) × 2 molle × 3 prove, più l'attuazione diretta.
 
 Il tornado viene da una regressione lineare di H sulle perturbazioni normalizzate x = δ / 20 %.
 Ogni coefficiente indica di quanti punti percentuali cambia H per una perturbazione di +20 % del
@@ -240,35 +240,10 @@ script.
 La scena rigenera comunque le sue mesh a ogni avvio, in una cartella di lavoro comune: meglio non
 aprire la GUI mentre girano gli script.
 
-## Ipotesi e limiti
-
-- La gravità è trascurata.
-- Le due isteresi sono un unico termine di Dahl, calcolato sullo spostamento del motore: nel
-  tornado non si possono separare.
-- Lo smorzamento agisce sulla velocità del tendine, che è piccola perché il tubo è molto rigido;
-  per questo c ha un effetto trascurabile su H.
-- Il passaggio da E di carico a E di scarico è istantaneo all'inversione del motore e provoca un
-  piccolo scatto della punta.
-- Per lo smorzamento numerico (`rayleighStiffness` = 0.1) la punta segue la tensione con circa
-  0.1 s di ritardo, quindi H dipende un po' dalla velocità con cui cresce T, che cambia da molla a
-  molla. Correggendo il ritardo l'ordine tra le molle non cambia.
-- Con il passo di mesh scelto la deflessione a 10 N differisce di circa il 5 % dalla teoria della
-  trave (0.304 contro 0.320 mm). La mesh dell'oggetto soffice non è del tutto convergente, quindi
-  le forze assolute sul soffice sono indicative (circa 15 %); i confronti tra configurazioni
-  restano validi.
-- La stabilità è valutata a regolazione finita, con il motore quasi fermo: il rapporto
-  picco-picco / media resta molto sotto il limite, e il criterio più severo diventa la banda
-  4.5–5.5 mN. Picco di forza e durata della regolazione sono riportati a parte.
-- La distanza punta–oggetto (0.03 mm) e la soglia di 5 mN non sono perturbate. Con la molla (b)
-  una distanza molto più grande sarebbe un problema: dopo il passaggio a 0.6 N/mm la tensione cala
-  e la punta potrebbe staccarsi dall'oggetto.
-- Con la molla (b), quando in scarico il contatto si perde, k torna a 4.8 N/mm e la tensione
-  risale di colpo, così la punta ritocca l'oggetto per un attimo. Succede dopo la finestra di
-  misura e non entra nelle metriche.
 
 ## Note su SOFA
 
-- Le unità sono mm, N, s e MPa; le masse sono in tonnellate.
+- Unità della scena: mm, N, s e MPa, quindi le masse sono in tonnellate.
 - Con `FreeMotionAnimationLoop` il valore del `CableConstraint` è un impulso, quindi si impone
   T·dt.
 - La forza di contatto si legge dalle `constraintForces` del `BlockGaussSeidelConstraintSolver`,
