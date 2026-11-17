@@ -1,6 +1,6 @@
 # Progetto 5: incertezza parametrica, Monte Carlo e analisi di sensibilità
 
-Robotica Medica, A.A. 2026/27
+Progetto di Robotica Medica, A.A. 2026/27, Vestri Giulio P38000317
 
 Il progetto simula in SOFA un tubo in nitinol che viene piegato da un tendine, con una molla in
 serie tra il motore e il tendine. L'obiettivo è capire quanto l'isteresi del sistema e la
