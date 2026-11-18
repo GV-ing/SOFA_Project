@@ -290,8 +290,8 @@ class TendonSpringController(Sofa.Core.Controller):
   def onKeypressedEvent(self, event):
     key = str(event.get("key", ""))
     step = self.params["u_step"]
-    is_up = key in ["19", "Up", "U", "u", "+"]
-    is_down = key in ["21", "Down", "D", "d", "-"]
+    is_up = key in ["\x13", "Up", "U", "u", "+"]
+    is_down = key in ["\x15", "Down", "D", "d", "-"]
     is_reset = key in ["R", "r"]
     is_auto = key in ["M", "m", "A", "a"]
 
