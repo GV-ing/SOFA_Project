@@ -81,7 +81,7 @@ NOMINAL_PARAMS = {
     # Ambiente di Contatto
     "contact_object": "soft",   # "soft" | "rigid" | "none"
     "obj_size": 20.0,           # Dimensione caratteristica oggetto [mm]
-    "obj_gap": 0.03,            # Gap punta-oggetto lungo Y [mm], UGUALE per rigido e soffice:
+    "obj_gap": 0.05,            # Gap punta-oggetto lungo Y [mm], UGUALE per rigido e soffice:
                                 #   contatto a T ~ 0.3 N (c = 0.0304 mm/N), stessa geometria per il
                                 #   confronto tra oggetti; H si misura comunque in moto libero
     "obj_overlap_x": 5.0,       # Quanto l'oggetto supera la punta lungo X [mm]
@@ -125,10 +125,10 @@ NOMINAL_PARAMS = {
         "manual_rate": 4.0,     # [mm/s] risposta piu' rapida ai tasti
         "parallel_components": True,   # FEM e collisione multi-core (plugin MultiThreading)
     },
-    "visual_amplification": 1.0,   # deformazioni mostrate x50 (1 = disattivata)
+    "visual_amplification": 50.0,   # deformazioni mostrate x50 (1 = disattivata)
     "display_flags": "showVisualModels",
     "live_plot_python": None,   # Interprete del viewer (None = automatico: Python di sistema)
-    "record_csv": True,         # Registrazione CSV nella GUI (results/gui_<data_ora>.csv)
+    "record_csv": False,         # Registrazione CSV nella GUI (results/gui_<data_ora>.csv)
     "plot_every": 5,            # Invia un punto ai grafici ogni N passi
 }
 
