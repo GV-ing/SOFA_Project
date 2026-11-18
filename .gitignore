@@ -1,1 +1,7 @@
-
+__pycache__/
+*.pyc
+meshes/scena/
+results/gui_*.csv
+*.log
+nohup.out
+*.zip
