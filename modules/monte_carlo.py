@@ -1,13 +1,9 @@
-# modules/monte_carlo.py
-"""Campionamento, elenco dei casi e analisi statistica del Monte Carlo (Progetto 5).
+"""
+modules/monte_carlo.py
 
-Traccia: per le configurazioni (a) molla fissa e (b) a due livelli, 20 realizzazioni dei
-parametri incerti (modulo uniforme 10-20%, segno casuale). Per ognuna: H (ciclo libero) e
-stabilita' del contatto (rigido e soffice). Regressione lineare di H sulle perturbazioni
-normalizzate -> diagramma tornado. Si riportano media, deviazione standard e caso peggiore di
-H, indice di robustezza (peggiore / nominale) e numero di realizzazioni con contatto instabile.
-Target: due parametri dominanti; per la configurazione piu' robusta peggiore <= 1.3 nominale
-e contatto stabile in tutte le 20 realizzazioni.
+Monte Carlo del Progetto 5: campionamento delle realizzazioni, elenco dei casi e analisi dei
+risultati (media, deviazione standard e caso peggiore di H, indice di robustezza, regressione
+per il diagramma tornado, contatti instabili, verifica dei target).
 """
 
 import numpy as np
@@ -17,12 +13,11 @@ from modules.config import MC_NUM_REALIZATIONS, MC_UNCERTAINTY_RANGE, NOMINAL_PA
 SPRING_CONFIGS = ("fixed", "switched")
 TESTS = ("free", "rigid", "soft")
 NOMINAL = "nominal"
-ROBUSTNESS_TARGET = 1.3
+ROBUSTNESS_TARGET = 1.3     # rapporto massimo ammesso tra caso peggiore e nominale
 
 
-# ------------------------------------------------------------------ campionamento
+# realizzazioni riproducibili: un delta per gruppo, |delta| uniforme tra 10 % e 20 %, segno casuale
 def sample_realizations(seed=2026, count=MC_NUM_REALIZATIONS):
-    """Realizzazioni riproducibili: un delta per gruppo, |delta| ~ U(10%, 20%), segno casuale."""
     if count < 1:
         raise ValueError("count deve essere almeno 1")
     low, high = MC_UNCERTAINTY_RANGE
@@ -39,8 +34,8 @@ def sample_realizations(seed=2026, count=MC_NUM_REALIZATIONS):
     return out
 
 
+# elenco dei casi: (nominale + realizzazioni) x configurazione x prova, più la diretta nominale
 def build_tasks(realizations, series_dir, include_direct=True):
-    """Elenco dei casi: (nominale + realizzazioni) x configurazione x prova, + diretta nominale."""
     items = [{"realization": NOMINAL, "deltas": {g: 0.0 for g in UNCERTAIN_GROUPS},
               "overrides": {}}] + list(realizations)
     tasks = []
@@ -54,17 +49,14 @@ def build_tasks(realizations, series_dir, include_direct=True):
         tasks.append({"case_id": f"{NOMINAL}_direct_free", "realization": NOMINAL,
                       "config": "direct", "test": "free", "overrides": {},
                       "series_dir": series_dir})
-    cost = {"soft": 3, "rigid": 2, "free": 1}  # i piu' lunghi per primi: carico bilanciato
+    cost = {"soft": 3, "rigid": 2, "free": 1}  # prima i casi più lunghi
     return sorted(tasks, key=lambda t: -cost[t["test"]])
 
 
-# ------------------------------------------------------------------ analisi
+# regressione lineare H = b0 + sum(b_g * x_g), con x_g = delta_g / 20 % in [-1, 1];
+# b_g = variazione di H [punti %] per +20 % del parametro g. Restituisce i gruppi ordinati
+# per |b_g|, il coefficiente standardizzato e R^2
 def regression_tornado(deltas, H):
-    """Regressione lineare H = b0 + sum_g b_g * x_g, con x_g = delta_g / 20% in [-1, 1].
-
-    b_g = variazione di H [punti %] per perturbazione massima (+20%) del parametro g.
-    Restituisce i gruppi ordinati per |b_g| (tornado), con coefficiente standardizzato e R^2.
-    """
     names = list(UNCERTAIN_GROUPS)
     X = np.array([[d[g] / MC_UNCERTAINTY_RANGE[1] for g in names] for d in deltas], float)
     y = np.asarray(H, float)
@@ -83,8 +75,8 @@ def regression_tornado(deltas, H):
     return {"intercept": float(beta[0]), "r2": r2, "coefficients": rows}
 
 
+# statistiche per configurazione e verifica dei target a partire dai risultati dei casi
 def analyze(results, realizations):
-    """Statistiche per configurazione e verifica dei target a partire dai risultati dei casi."""
     ok = {(r["realization"], r["config"], r["test"]): r["metrics"]
           for r in results if "metrics" in r}
     failed = [r["case_id"] for r in results if "error" in r]
@@ -129,7 +121,7 @@ def analyze(results, realizations):
         c["unstable_contact"] = unstable
         c["unstable_total"] = unstable["rigid"] + unstable["soft"]
         c["contact_out_of_band"] = out_of_band
-        # transitorio dopo il rilevamento (prima della finestra): durata massima e picco di F
+        # durata massima della regolazione e picco massimo di F prima della finestra
         c["regulation_s_max"] = {o: max(v) if v else None for o, v in reg_s.items()}
         c["F_peak_max_N"] = {o: max(v) if v else None for o, v in F_peak.items()}
         n_contact = sum(1 for r in realizations for o in ("rigid", "soft")
@@ -145,7 +137,8 @@ def analyze(results, realizations):
 
     candidates = [cfg for cfg, c in summary["configs"].items() if "robustness_index" in c]
     if candidates:
-        # prima chi rispetta il target, poi meno casi instabili, poi indice di robustezza minore
+        # configurazione più robusta: prima chi rispetta il target, poi meno contatti
+        # instabili, poi indice di robustezza più basso
         best = min(candidates, key=lambda k: (not summary["configs"][k]["meets_target"],
                                               summary["configs"][k]["unstable_total"],
                                               summary["configs"][k]["robustness_index"]))

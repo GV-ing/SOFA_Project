@@ -1,22 +1,22 @@
-# modules/mc_worker.py
-"""Esecuzione di un singolo caso Monte Carlo in un processo separato (spawn).
+"""
+modules/mc_worker.py
 
-Ogni caso gira in un processo nuovo (max_tasks_per_child = 1): SOFA parte pulito e la
-memoria viene liberata alla fine del caso.
+Esecuzione di un singolo caso del Monte Carlo. Ogni caso gira in un processo nuovo, così SOFA
+parte pulito e la memoria viene liberata alla fine.
 """
 
 import os
 import traceback
 
 
+# task: dizionario con case_id, realization, config, test, overrides, series_dir
 def run_task(task):
-    """task: dict con case_id, realization, config, test, overrides, series_dir."""
     from modules.protocols import CONFIGS, contact_test, free_cycle, save_series
 
     result = {k: task[k] for k in ("case_id", "realization", "config", "test")}
     if task.get("tag"):
         result["tag"] = task["tag"]
-    if task.get("dry_run"):  # verifica della pipeline senza SOFA (metriche sintetiche)
+    if task.get("dry_run"):  # metriche finte per provare la pipeline senza SOFA
         import math
         seed = sum(map(ord, task["case_id"]))
         if task["test"] == "free":
@@ -33,7 +33,7 @@ def run_task(task):
             metrics, history = contact_test(task["test"], overrides)
         save_series(os.path.join(task["series_dir"], f"{task['case_id']}.csv"), history)
         result["metrics"] = metrics
-    except Exception as exc:  # il caso fallito viene registrato, la campagna prosegue
+    except Exception as exc:  # l'errore viene salvato nel risultato e la campagna continua
         result["error"] = f"{type(exc).__name__}: {exc}"
         result["traceback"] = traceback.format_exc()
     return result

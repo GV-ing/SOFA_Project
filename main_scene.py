@@ -1,11 +1,20 @@
-# main_scene.py - SOFA v26.06 (SofaPython3, Python 3.12)
+"""
+main_scene.py
+
+Scena SOFA del Progetto 5: tubo in Nitinol con tendine (CableConstraint), oggetto di contatto
+rigido o soffice e controller della molla in serie.
+SOFA v26.06, SofaPython3, Python 3.12.
+
+Uso:
+    ./run_gui.sh [--object soft|rigid|none] [--spring fixed|switched|direct]
+"""
 import os
 import sys
 import numpy as np
 import Sofa
 import Sofa.Core
 
-# Aggiunge la directory corrente al path per importare il package 'modules'
+# cartella del progetto nel path per importare modules
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 from modules.config import NOMINAL_PARAMS, SPRING_CONFIGS
@@ -20,6 +29,7 @@ from modules.controller import TendonSpringController
 from modules.contact_force import read_contact_force
 
 
+# nomi usati in config.py -> componenti SOFA
 _COLLISION_MODELS = {
     "triangle": "TriangleCollisionModel",
     "line": "LineCollisionModel",
@@ -27,8 +37,8 @@ _COLLISION_MODELS = {
 }
 
 
+# converte i nomi dei modelli di collisione di config.py nei componenti SOFA
 def _collision_model_names(names):
-    """Converte ('Point', 'Triangle', ...) nei componenti SOFA corrispondenti."""
     if isinstance(names, str):
         names = (names,)
     try:
@@ -40,16 +50,16 @@ def _collision_model_names(names):
     return models
 
 
+# costruisce la scena; senza custom_params (avvio da runSofa) vale il profilo GUI
 def createScene(rootNode, custom_params=None):
     params = NOMINAL_PARAMS.copy()
-    gui = custom_params is None               # runSofa chiama createScene(rootNode)
+    gui = custom_params is None
     if gui and params.get("gui_fast", True):
-        # Profilo interattivo: mesh piu' leggere e motore piu' rapido (solo GUI/video).
-        # Script e Monte Carlo passano custom_params e usano sempre il modello validato.
+        # profilo GUI: valori di gui_overrides
         params.update(params["gui_overrides"])
         print(f"[GUI] profilo interattivo: {params['gui_overrides']}")
     if gui:
-        # Scelta di oggetto e molla dal launcher (run_gui.sh --object ... --spring ...)
+        # oggetto, molla e ordine dei livelli scelti da run_gui.sh con variabili d'ambiente
         obj = os.environ.get("P5_OBJECT")
         if obj:
             params["contact_object"] = obj
@@ -72,16 +82,16 @@ def createScene(rootNode, custom_params=None):
               f" | forza in contatto {params['force_ref'] * 1e3:g} mN +/-{params['force_band'] * 100:g} %")
     if custom_params is not None:
         params.update(custom_params)
-    # Con la vista amplificata (solo GUI) la forma reale resta visibile in trasparenza
+    # con la vista amplificata il modello visivo reale diventa semitrasparente
     ghost_alpha = 0.25 if gui and params.get("visual_amplification", 1.0) > 1.0 else 1.0
     if params["contact_object"] not in {"soft", "rigid", "none"}:
         raise ValueError("contact_object deve essere 'soft', 'rigid' oppure 'none'")
 
-    # 1. Configurazione Root Node (unita': mm, N, MPa, s)
+    # 1. nodo radice (unità: mm, N, MPa, s), senza gravità
     rootNode.dt = params["dt"]
     rootNode.gravity = [0.0, 0.0, 0.0]
 
-    # 2. Plugin richiesti
+    # 2. plugin
     plugins = [
         "Sofa.Component.AnimationLoop",
         "Sofa.Component.Collision.Detection.Algorithm",
@@ -108,27 +118,26 @@ def createScene(rootNode, custom_params=None):
         "Sofa.GL.Component.Rendering3D",
         "SoftRobots",
     ]
-    # Componenti paralleli (plugin MultiThreading): stessi algoritmi, calcolo su piu' core.
+    # con parallel_components si usano le versioni Parallel dei componenti (plugin MultiThreading)
     par = "Parallel" if params.get("parallel_components", False) else ""
     if par:
         plugins.append("MultiThreading")
     for p in plugins:
         rootNode.addObject("RequiredPlugin", name="req_" + p.replace(".", "_"), pluginName=p)
 
-    # Camera e stile visivo
+    # 3. visualizzazione
     rootNode.addObject("DefaultVisualManagerLoop")
-    # Solo modelli visivi: disegnare nodi FEM e force field rallenta molto la GUI (VM)
     rootNode.addObject("VisualStyle", name="visualStyle",
                        displayFlags=params.get("display_flags", "showVisualModels"))
 
-    # Loop di animazione e Constraint Solver
+    # 4. animation loop e solver dei vincoli
     rootNode.addObject("FreeMotionAnimationLoop", name="FreeMotionLoop")
     rootNode.addObject("BlockGaussSeidelConstraintSolver", name="ConstraintSolver",
                        maxIterations=int(params.get("cs_max_iterations", 500)),
                        tolerance=float(params.get("cs_tolerance", 1e-7)),
                        computeConstraintForces=True)
 
-    # Pipeline di collisione e risposta con attrito mu = 0.2
+    # 5. collisioni: pipeline, LocalMinDistance e risposta con attrito
     rootNode.addObject("CollisionPipeline", name="CollisionPipeline", depth=6)
     rootNode.addObject(par + "BruteForceBroadPhase", name="BroadPhase")
     rootNode.addObject(par + "BVHNarrowPhase", name="NarrowPhase")
@@ -143,11 +152,8 @@ def createScene(rootNode, custom_params=None):
                        response="FrictionContactConstraint",
                        responseParams="mu=" + str(params["mu_friction"]))
 
-    # 3. Mesh del tubo: FEM graduata (fine sulla parte flessibile) e superfici separate,
-    #    piu' grossolane, per i modelli visivo e di collisione (BarycentricMapping).
-    # Mesh rigenerate a ogni avvio con i parametri correnti (anche profilo GUI): cartella di
-    # lavoro meshes/scena/ (ignorata da git). Le mesh nominali da consegnare le scrive
-    # tools/generate_meshes.py direttamente in meshes/.
+    # 6. mesh del tubo: FEM tetraedrica graduata e superfici visiva e di collisione,
+    #    rigenerate a ogni avvio in meshes/scena/
     mesh_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), "meshes", "scena")
     fem_nodes, tetrahedra, mesh_files = build_tube_meshes(params, mesh_dir)
     obj_path = mesh_files["visual"]
@@ -156,17 +162,18 @@ def createScene(rootNode, custom_params=None):
     if bad > 0:
         raise RuntimeError(f"Mesh tubo non valida: {bad} tetraedri invertiti/degeneri (vol min {vmin:.4g})")
 
+    # nodi della sezione di punta (x = length_total)
     nodes_np = np.array(fem_nodes)
     tip_node_indices = np.where(np.isclose(nodes_np[:, 0], params["length_total"], atol=1e-3))[0].tolist()
 
-    # 4. Nodo meccanico del tubo in Nitinol
+    # 7. tubo: solver, topologia, massa e FEM
     tubeNode = rootNode.addChild("NitinolTube")
     tubeNode.addObject("EulerImplicitSolver", name="odesolver", rayleighStiffness=0.1, rayleighMass=0.1)
     tubeNode.addObject("SparseLDLSolver", name="linearsolver", template="CompressedRowSparseMatrixMat3x3d")
 
     tubeNode.addObject("MeshTopology", name="topology", position=fem_nodes, tetrahedra=tetrahedra)
     tubeMeca = tubeNode.addObject("MechanicalObject", name="dofs", template="Vec3d")
-    # Massa reale dalla densita' (mm-N-s -> tonnellate): ~7.6e-7 t = 0.76 g per il tubo baseline
+    # massa totale = densità * volume della mesh
     tubeNode.addObject("UniformMass", name="mass", totalMass=params["rho_tube"] * tube_volume)
 
     femFF = tubeNode.addObject(
@@ -177,14 +184,14 @@ def createScene(rootNode, custom_params=None):
         method="large",
     )
 
-    # Vincolo albero prossimale (primi 40 mm)
+    # albero prossimale bloccato (primi length_shaft mm)
     tubeNode.addObject("BoxROI", name="shaftROI",
                        box=[-0.5, -2.0, -2.0, params["length_shaft"] + 0.01, 2.0, 2.0],
                        drawBoxes=True)
     tubeNode.addObject("FixedProjectiveConstraint", name="FixedShaft", indices="@shaftROI.indices")
     tubeNode.addObject("LinearSolverConstraintCorrection", name="LinearConstraintCorrection")
 
-    # 5. Sotto-nodo Tendine (CableConstraint)
+    # 8. tendine: punti a y = yt_offset dalla fine dell'albero alla punta, tirati dal pullPoint
     tendonNode = tubeNode.addChild("Tendon")
     num_cable_pts = 15
     cable_x = np.linspace(params["length_shaft"], params["length_total"], num_cable_pts)
@@ -202,7 +209,7 @@ def createScene(rootNode, custom_params=None):
     )
     tendonNode.addObject("BarycentricMapping", name="tendonMapping")
 
-    # 6. Modello visivo
+    # 9. modelli visivo e di collisione del tubo, mappati sulla mesh FEM
     visualNode = tubeNode.addChild("VisualModel")
     visualNode.addObject("MeshOBJLoader", name="objLoader", filename=obj_path)
     visualNode.addObject("OglModel", name="Visual", src="@objLoader", color=[0.75, 0.78, 0.82, ghost_alpha])
@@ -216,7 +223,7 @@ def createScene(rootNode, custom_params=None):
         tubeCollisionNode.addObject(model, group=0, simulated=True, moving=True)
     tubeCollisionNode.addObject("BarycentricMapping")
 
-    # 7. Oggetto di contatto selezionabile.
+    # 10. oggetto di contatto davanti alla punta
     L = params["length_total"]
     contact_object = params["contact_object"]
     if contact_object != "none":
@@ -233,11 +240,13 @@ def createScene(rootNode, custom_params=None):
         contactNode = rootNode.addChild(
             "SoftContactObject" if contact_object == "soft" else "RigidContactObject"
         )
+        # oggetto soffice: FEM esaedrica con la faccia posteriore bloccata
         if contact_object == "soft":
             contactNode.addObject("EulerImplicitSolver", name="odesolver",
                                   rayleighStiffness=0.1, rayleighMass=0.1)
             contactNode.addObject("SparseLDLSolver", name="linearsolver",
                                   template="CompressedRowSparseMatrixMat3x3d")
+            # griglia graduata (più fitta al contatto) oppure griglia regolare
             if graded:
                 soft_pos, soft_hexa = box_hexa_mesh(xs, ys, zs)
                 contactNode.addObject("HexahedronSetTopologyContainer", name="grid",
@@ -264,6 +273,7 @@ def createScene(rootNode, custom_params=None):
                 poissonRatio=params["poisson_soft"],
                 method="large",
             )
+            # faccia posteriore (y = y_max)
             contactNode.addObject(
                 "BoxROI",
                 name="backROI",
@@ -282,6 +292,7 @@ def createScene(rootNode, custom_params=None):
                 name="LinearConstraintCorrection",
             )
 
+        # superficie di collisione dell'oggetto
         collisionNode = contactNode.addChild("CollisionModel")
         collisionNode.addObject(
             "TriangleSetTopologyContainer",
@@ -308,6 +319,7 @@ def createScene(rootNode, custom_params=None):
                 simulated=True,
                 moving=(contact_object == "soft"),
             )
+        # soffice: superficie mappata sulla FEM; rigido: tutti i punti bloccati
         if contact_object == "soft":
             collisionNode.addObject("BarycentricMapping")
         else:
@@ -327,7 +339,7 @@ def createScene(rootNode, custom_params=None):
         if contact_object == "soft":
             visualNode.addObject("BarycentricMapping")
 
-    # 8. Controller Python
+    # 11. controller della molla in serie e del ciclo di prova
     controller = rootNode.addObject(
         TendonSpringController(
             name="ActuationController",
@@ -344,8 +356,7 @@ def createScene(rootNode, custom_params=None):
         )
     )
 
-    # 9. Solo nella GUI (runSofa chiama createScene senza custom_params): grafici in tempo
-    #    reale e registrazione CSV. Script e Monte Carlo passano custom_params -> disattivati.
+    # 12. solo GUI: vista amplificata, registrazione CSV e grafici in tempo reale
     if custom_params is None:
         if params.get("visual_amplification", 1.0) > 1.0:
             from modules.amplified_view import add_amplified_view

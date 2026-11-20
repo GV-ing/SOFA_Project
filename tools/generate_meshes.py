@@ -1,35 +1,39 @@
 #!/usr/bin/env python3
-# tools/generate_meshes.py
-"""Genera in meshes/ le mesh del progetto con i parametri nominali di modules/config.py.
+"""
+tools/generate_meshes.py
 
-Sono le stesse funzioni che usa la scena (modules/geometry_gen.py), che comunque rigenera
-le mesh a ogni avvio: questo script serve a ottenerle senza SOFA, da ispezionare o consegnare.
+Genera in meshes/ le mesh del progetto con i parametri nominali di modules/config.py, usando
+le stesse funzioni della scena (modules/geometry_gen.py). Non serve SOFA, solo numpy.
 
-  meshes/tube_surface.obj      superficie del tubo, modello visivo         (STL/OBJ, traccia)
-  meshes/tube_collision.obj    superficie del tubo, modello di collisione  (STL/OBJ, traccia)
-  meshes/tube_fem_surface.obj  superficie esterna della mesh FEM (controllo)
-  meshes/tube_volume.vtk       mesh volumetrica tetraedrica del tubo      (meccanica, traccia)
-  meshes/soft_volume.vtk       mesh volumetrica esaedrica dell'oggetto soffice
-  meshes/object_surface.obj    superficie dell'oggetto di contatto (rigido e soffice)
+    meshes/tube_surface.obj       superficie del tubo, modello visivo
+    meshes/tube_collision.obj     superficie del tubo, modello di collisione
+    meshes/tube_fem_surface.obj   superficie della mesh FEM
+    meshes/tube_volume.vtk        mesh volumetrica tetraedrica del tubo
+    meshes/soft_volume.vtk        mesh volumetrica esaedrica dell'oggetto soffice
+    meshes/object_surface.obj     superficie dell'oggetto di contatto
 
-I .vtk si aprono con ParaView. Non richiede SOFA (solo numpy):
-    python3.12 tools/generate_meshes.py          # dopo source env.sh
-    python3 tools/generate_meshes.py             # oppure Python di sistema con numpy
+I file .vtk si aprono con ParaView.
+
+Uso:
+    python3.12 tools/generate_meshes.py      (dopo source env.sh)
+    python3 tools/generate_meshes.py         (Python di sistema con numpy)
 """
 
 import os
 import sys
 
+# cartella del progetto nel path per importare modules
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
 
-from modules.config import NOMINAL_PARAMS  # noqa: E402
-from modules.geometry_gen import (  # noqa: E402
+from modules.config import NOMINAL_PARAMS
+from modules.geometry_gen import (
     box_hexa_mesh, box_surface, build_tube_meshes, check_tet_mesh, contact_object_axes,
     write_vtk_hexa, write_vtk_tetra,
 )
 
 
+# superficie dell'oggetto in formato .obj (indici da 1)
 def write_obj(path, positions, triangles):
     with open(path, "w", encoding="ascii") as f:
         f.write("# Oggetto di contatto - superficie\n")
@@ -43,6 +47,7 @@ def main():
     p = dict(NOMINAL_PARAMS)
     mesh_dir = os.path.join(PROJECT_DIR, "meshes")
 
+    # tubo: superfici .obj e mesh volumetrica
     nodes, tetras, files = build_tube_meshes(p, mesh_dir)
     bad, vmin, vol = check_tet_mesh(nodes, tetras)
     files["volume"] = os.path.join(mesh_dir, "tube_volume.vtk")
@@ -50,6 +55,7 @@ def main():
     print(f"Tubo: {len(nodes)} nodi, {len(tetras)} tetraedri (h_flex = {p['mesh_h_flex']} mm), "
           f"invertiti/degeneri = {bad} (atteso 0), volume = {vol:.2f} mm^3")
 
+    # oggetto di contatto: mesh volumetrica del soffice e superficie
     xs, ys, zs, _, _ = contact_object_axes(dict(p, contact_object="soft"))
     soft_nodes, soft_hexa = box_hexa_mesh(xs, ys, zs)
     files["soft_volume"] = os.path.join(mesh_dir, "soft_volume.vtk")

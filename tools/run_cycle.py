@@ -1,23 +1,19 @@
 #!/usr/bin/env python3
-# tools/run_cycle.py  -  SOFA v26.06 / SofaPython3 / Python 3.12
 """
-Esegue i casi NOMINALI del Progetto 5 (stessi protocolli del Monte Carlo, modules/protocols.py)
-e ne stampa le metriche.
+tools/run_cycle.py
 
-Casi:
-  free     ciclo libero senza oggetto: carico fino a T = 10 N o u = 15 mm, poi scarico -> H [%]
-           molle: fixed (1.2), switched (0.6/4.8 nei due ordini), direct (k = 50, 0.1 mm/s)
-  contact  avvicinamento a contact_rate -> rilevamento a 5 mN -> regolazione a 5 mN +/-10 %
-           -> 1 s in banda a motore fermo -> finestra di 5 s
-           su oggetto rigido e soffice, molle fixed e switched     -> stabilita' e banda
+Casi nominali del Progetto 5, con gli stessi protocolli del Monte Carlo (modules/protocols.py).
+Per ogni caso salva in --outdir la serie temporale (<caso>.csv) e le metriche (<caso>.json).
+
+    --free      cicli liberi per H: fixed, switched (nei due ordini), direct
+    --contact   prove di contatto su oggetto rigido e soffice: fixed e switched
 
 Ordini della molla a due livelli (--kfree): low = 0.6 libero / 4.8 contatto,
-high = 4.8 libero / 0.6 contatto. Per ogni caso salva in --outdir la serie temporale
-(<caso>.csv, una riga per passo) e le metriche (<caso>.json).
+high = 4.8 libero / 0.6 contatto.
 
-Esecuzione (cartella SOFA_Project, source env.sh):
-    python3.12 -u tools/run_cycle.py --free                         # 4 cicli liberi
-    python3.12 -u tools/run_cycle.py --contact --objects rigid      # 3 prove sul rigido
+Uso (cartella SOFA_Project, dopo source env.sh):
+    python3.12 -u tools/run_cycle.py --free
+    python3.12 -u tools/run_cycle.py --contact --objects rigid
     python3.12 -u tools/run_cycle.py --contact --objects soft --configs switched --kfree high
 """
 
@@ -26,14 +22,15 @@ import json
 import os
 import sys
 
+# cartella del progetto nel path per importare modules
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
 
-from modules.protocols import CONFIGS, contact_test, free_cycle, save_series  # noqa: E402
+from modules.protocols import CONFIGS, contact_test, free_cycle, save_series
 
 
+# coppie (nome del caso, parametri della molla); switched viene ripetuta per ogni ordine
 def spring_cases(configs, kfree):
-    """(nome del caso, override della molla); la switched si ripete per ogni ordine."""
     for name in configs:
         if name == "switched":
             for level in kfree:
@@ -42,6 +39,7 @@ def spring_cases(configs, kfree):
             yield name, dict(CONFIGS[name])
 
 
+# salva serie (.csv) e metriche (.json) di un caso
 def save(outdir, case, metrics, history):
     save_series(os.path.join(outdir, f"{case}.csv"), history)
     with open(os.path.join(outdir, f"{case}.json"), "w", encoding="utf-8") as f:
@@ -62,6 +60,7 @@ def main():
     if not (a.free or a.contact):
         ap.error("specificare --free e/o --contact")
 
+    # cicli liberi: H di ogni molla e rapporto con l'attuazione diretta
     if a.free:
         print("\n=== Cicli liberi (H) ===", flush=True)
         H = {}
@@ -79,6 +78,7 @@ def main():
                 if case != "direct":
                     print(f"  H_{case} / H_direct = {value / H['direct']:.3f}")
 
+    # prove di contatto (l'attuazione diretta è esclusa)
     if a.contact:
         print("\n=== Prove di contatto (5 mN +/-10 %, finestra di 5 s) ===", flush=True)
         for obj in a.objects:

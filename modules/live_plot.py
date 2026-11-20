@@ -1,13 +1,13 @@
-# modules/live_plot.py
-"""Listener del controller usati SOLO nella GUI (runSofa): grafici live e registrazione CSV.
+"""
+modules/live_plot.py
 
-  LivePlotListener  avvia tools/live_plot_viewer.py come processo separato (Python di sistema
-                    con matplotlib e tkinter, NON il python3.12 di SOFA) e gli
-                    invia un campione ogni `plot_every` passi; se la finestra non parte o viene
-                    chiusa, si disattiva senza fermare la simulazione.
-  CsvRecorder       scrive ogni passo in results/gui_<data_ora>.csv (export CSV richiesto).
+Listener del controller usati solo nella GUI.
 
-Il viewer parte SENZA il PYTHONPATH di SOFA, cosi' usa il proprio matplotlib/numpy.
+    LivePlotListener    avvia tools/live_plot_viewer.py in un processo separato (Python di
+                        sistema con matplotlib e tkinter) e gli invia un campione ogni
+                        plot_every passi; se la finestra non parte o viene chiusa si disattiva
+                        senza fermare la simulazione
+    CsvRecorder         scrive ogni passo in results/gui_<data_ora>.csv
 """
 
 import atexit
@@ -22,21 +22,18 @@ PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 VIEWER = os.path.join(PROJECT_DIR, "tools", "live_plot_viewer.py")
 
 
+# ambiente del viewer senza le variabili di SOFA (librerie e numpy compilati per 3.12)
 def _viewer_env():
-    """Ambiente pulito per il viewer: niente librerie/numpy di SOFA (compilati per 3.12)."""
     env = dict(os.environ)
     for var in ("PYTHONPATH", "PYTHONHOME", "LD_LIBRARY_PATH"):
         env.pop(var, None)
-    env["PYTHONPATH"] = PROJECT_DIR          # modules.config e modules.metrics (puri, numpy)
+    env["PYTHONPATH"] = PROJECT_DIR          # per importare modules.config e modules.metrics
     return env
 
 
+# primo interprete che importa matplotlib e tkinter: quello indicato in config
+# (live_plot_python), poi il Python di sistema, poi python3.12
 def find_viewer_python(preferred=None):
-    """Primo interprete che importa matplotlib e tkinter (finestra TkAgg) senza SOFA.
-
-    Ordine: preferito (config 'live_plot_python'), Python di sistema (Ubuntu 22.04: 3.10 con
-    python3-matplotlib e python3-tk da apt), poi python3.12.
-    """
     candidates = [preferred, "/usr/bin/python3", shutil.which("python3"), shutil.which("python3.12")]
     seen = set()
     for exe in candidates:
@@ -70,13 +67,14 @@ class LivePlotListener:
         except OSError as exc:
             print(f"[LIVE PLOT] disattivati: {exc}")
 
+    # invia il campione al viewer come riga JSON
     def __call__(self, sample):
         if self.proc is None:
             return
         self.count += 1
         if self.count % self.every:
             return
-        if self.proc.poll() is not None:     # finestra chiusa o viewer fallito
+        if self.proc.poll() is not None:     # finestra chiusa o viewer terminato
             print("[LIVE PLOT] finestra chiusa: grafici disattivati (la simulazione continua)")
             self.proc = None
             return
@@ -98,9 +96,10 @@ class CsvRecorder:
         self.writer = csv.writer(self.file)
         self.writer.writerow(self.fields)
         self.rows = 0
-        atexit.register(self.file.close)     # chiude (e svuota) il file all'uscita di runSofa
+        atexit.register(self.file.close)     # chiude il file all'uscita di runSofa
         print(f"[CSV] registrazione in {self.path}")
 
+    # scrive una riga per passo, svuota il buffer ogni 100 righe
     def __call__(self, sample):
         self.writer.writerow([sample[f] for f in self.fields])
         self.rows += 1

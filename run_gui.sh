@@ -1,21 +1,21 @@
 #!/usr/bin/env bash
-# run_gui.sh - avvia la scena del Progetto 5 in runSofa da qualunque cartella.
+# run_gui.sh: avvia la scena del Progetto 5 in runSofa da qualunque cartella
 #
 # Uso:
-#   ./run_gui.sh                                  # oggetto soffice, molla fissa 1.2 N/mm
-#   ./run_gui.sh --object rigid --spring switched # oggetto rigido, molla 0.6/4.8 N/mm
-#   ./run_gui.sh --object none                    # moto libero
-#   ./run_gui.sh --help
+#   ./run_gui.sh                                   oggetto soffice, molla fissa 1.2 N/mm
+#   ./run_gui.sh --object rigid --spring switched  oggetto rigido, molla a due livelli
+#   ./run_gui.sh --object none                     moto libero
+#
 # Opzioni:  --object soft|rigid|none   --spring fixed|switched|direct
-#           --kfree high|low  (molla switched: 4.8 o 0.6 N/mm in moto libero; default config.py)
-#           eventuali altri argomenti vengono passati a runSofa.
-# Se SOFA e' installato altrove:  SOFA_ROOT=/percorso/SOFA_v26.06.00_Linux ./run_gui.sh
+#           --kfree high|low   livello di k in moto libero per la molla switched
+#           gli altri argomenti passano a runSofa; SOFA_ROOT=... per un'altra installazione
 set -euo pipefail
 
 PROJECT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SOFA_BASE="$(dirname "$PROJECT_DIR")"     # ~/SOFA_v26.06.00_Linux_Python3.12
+SOFA_BASE="$(dirname "$PROJECT_DIR")"     # cartella che contiene SOFA e SOFA_Project
 export SOFA_ROOT="${SOFA_ROOT:-$SOFA_BASE/SOFA_v26.06.00_Linux}"
 
+# lettura delle opzioni
 EXTRA=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
@@ -29,16 +29,19 @@ done
 case "${P5_OBJECT:-soft}" in soft|rigid|none) ;; *) echo "--object: soft|rigid|none"; exit 1 ;; esac
 case "${P5_SPRING:-fixed}" in fixed|switched|direct) ;; *) echo "--spring: fixed|switched|direct"; exit 1 ;; esac
 
+# controllo della cartella di SOFA
 if [[ ! -d "$SOFA_ROOT" ]]; then
   echo "SOFA non trovato in $SOFA_ROOT. Impostare SOFA_ROOT=/percorso/SOFA_v26.06.00_Linux"
   exit 1
 fi
+# percorsi di SofaPython3, STLIB, SoftRobots e del progetto
 SP="$SOFA_ROOT/plugins"
 export PYTHONPATH="$SP/SofaPython3/lib/python3/site-packages:$SP/STLIB/lib/python3/site-packages:$SP/SoftRobots/lib/python3/site-packages:$PROJECT_DIR${PYTHONPATH:+:$PYTHONPATH}"
 export LD_LIBRARY_PATH="$SOFA_ROOT/lib:$SP/SofaPython3/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 
+# avvio con il launcher se c'è, altrimenti con runSofa
 SCENE="$PROJECT_DIR/main_scene.py"
-WRAPPER="$SOFA_BASE/SOFA/run_sofa.sh"     # launcher dell'installazione, se presente
+WRAPPER="$SOFA_BASE/SOFA/run_sofa.sh"     # launcher di SOFA, se presente
 echo "[run_gui] scena: $SCENE | oggetto: ${P5_OBJECT:-soft} | molla: ${P5_SPRING:-fixed}"
 if [[ -x "$WRAPPER" ]]; then
   cd "$(dirname "$WRAPPER")"

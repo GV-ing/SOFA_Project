@@ -1,19 +1,20 @@
 #!/usr/bin/env python3
-# tools/make_figures.py  -  figure della relazione dai risultati del Monte Carlo
 """
-Genera le figure del Progetto 5 da una cartella di campagna (results/mc_finale):
+tools/make_figures.py
 
-  fig_tornado.png          coefficienti di regressione di H (punti di H per +20%)
-  fig_H_realizzazioni.png  H per realizzazione, nominale e soglia 1.3 x nominale
-  fig_forze_contatto.png   forza nella finestra di 5 s (media, min-max) e banda 4.5-5.5 mN
-  fig_isteresi_nominale.png   cicli dY(u) nominali    (se ci sono le serie temporali)
-  fig_contatto_nominale.png   F(t) e k(t) nominali    (se ci sono le serie temporali)
+Figure del Progetto 5 a partire da una cartella di campagna Monte Carlo (results/mc_finale).
 
-Serie temporali: <campagna>/series/<caso>.csv; in mancanza si usano quelle dei casi nominali
-di tools/run_cycle.py (results/nominali/). Da li' si prende anche l'ordine della molla (b)
+    fig_tornado.png             coefficienti della regressione di H (punti di H per +20 %)
+    fig_H_realizzazioni.png     H per realizzazione, nominale e soglia 1.3 x nominale
+    fig_forze_contatto.png      forza nella finestra di 5 s (media, min-max) e banda 4.5-5.5 mN
+    fig_isteresi_nominale.png   cicli dY(u) nominali
+    fig_contatto_nominale.png   F(t) e k(t) nominali
+
+Le serie temporali si prendono da <campagna>/series/<caso>.csv; se mancano, da quelle dei casi
+nominali di tools/run_cycle.py (results/nominali/). Da lì viene anche l'ordine della molla (b)
 non usato nel Monte Carlo, mostrato solo nel ciclo nominale.
 
-Uso (non richiede SOFA):
+Uso (senza SOFA):
     env -u PYTHONPATH python3 tools/make_figures.py --campaign results/mc_finale --out results/figures
 """
 
@@ -26,17 +27,18 @@ import sys
 import matplotlib
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt  # noqa: E402
-import numpy as np  # noqa: E402
+import matplotlib.pyplot as plt
+import numpy as np
 
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 NOMINALI = os.path.join(PROJECT_DIR, "results", "nominali")
 sys.path.insert(0, PROJECT_DIR)
-from modules.config import NOMINAL_PARAMS  # noqa: E402
+from modules.config import NOMINAL_PARAMS
 
-# Palette categoriale validata (slot 1-3) + inchiostri; banda in grigio neutro
+# colori delle configurazioni e degli elementi dei grafici
 C_FIXED, C_SWITCH, C_OTHER, C_DIRECT = "#2a78d6", "#eb6834", "#1baf7a", "#52514e"
 INK, INK2, GRID, BAND = "#0b0b0b", "#52514e", "#e4e3df", "#9c9b95"
+# etichette delle configurazioni e dei parametri incerti
 ORDER = {"low": "0.6 libero / 4.8 in contatto", "high": "4.8 libero / 0.6 in contatto"}
 LABEL = {"fixed": "(a) molla fissa k = 1.2 N/mm", "switched": "(b) due livelli",
          "other": "(b) ordine non scelto", "direct": "attuazione diretta k = 50 N/mm"}
@@ -45,6 +47,7 @@ PARAM = {"E": "E (carico/scarico)", "Fh_mat": "F_h materiale", "Fh_spring": "F_h
          "c": "smorzamento c", "k": "rigidezza k", "yt": "offset tendine y_t"}
 
 
+# stile comune delle figure
 def style():
     plt.rcParams.update({
         "figure.dpi": 110, "savefig.dpi": 200, "font.size": 9.5,
@@ -56,6 +59,7 @@ def style():
     })
 
 
+# legge summary, realizzazioni e risultati dei casi della campagna
 def load(campaign):
     with open(os.path.join(campaign, "summary.json"), encoding="utf-8") as f:
         summary = json.load(f)
@@ -70,15 +74,17 @@ def load(campaign):
                     r = json.loads(line)
                 except json.JSONDecodeError:
                     continue
-                latest[r["case_id"]] = r          # l'ultima riga del caso prevale
+                latest[r["case_id"]] = r          # se un caso compare più volte vale l'ultima riga
     return summary, reals, latest
 
 
+# metrica di un caso (None se il caso manca o è fallito)
 def metric(latest, real, cfg, test, key):
     r = latest.get(f"{real}_{cfg}_{test}")
     return r["metrics"].get(key) if r and "metrics" in r else None
 
 
+# diagramma tornado delle due configurazioni
 def fig_tornado(summary, out):
     fig, axes = plt.subplots(1, 2, figsize=(9.2, 3.4), sharex=True)
     for ax, cfg in zip(axes, ("fixed", "switched")):
@@ -105,6 +111,7 @@ def fig_tornado(summary, out):
     plt.close(fig)
 
 
+# H per realizzazione, con nominale, soglia 1.3 x nominale e attuazione diretta
 def fig_H(summary, reals, latest, out):
     ids = [r["realization"] for r in reals]
     x = np.arange(len(ids))
@@ -137,6 +144,8 @@ def fig_H(summary, reals, latest, out):
     plt.close(fig)
 
 
+# forza di contatto nella finestra (media e min-max) per realizzazione; cerchiate le prove
+# instabili o fuori banda
 def fig_forces(reals, latest, out):
     ids = [r["realization"] for r in reals]
     x = np.arange(len(ids))
@@ -178,6 +187,7 @@ def fig_forces(reals, latest, out):
     plt.close(fig)
 
 
+# legge una serie temporale CSV (phase come testo, il resto come numeri)
 def read_series(path):
     with open(path, encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
@@ -190,8 +200,8 @@ def read_series(path):
     return out
 
 
+# serie della campagna (case_id) o, se manca, quella di fallback
 def find_series(campaign, case_id, fallback=None):
-    """Serie della campagna (case_id) o, in mancanza, quella di fallback."""
     p = os.path.join(campaign, "series", f"{case_id}.csv") if case_id else None
     if p and os.path.exists(p):
         return read_series(p)
@@ -200,8 +210,8 @@ def find_series(campaign, case_id, fallback=None):
     return None
 
 
+# H del ciclo libero nominale da results/nominali/free_<case>.json, se esiste
 def _nominal_H(case):
-    """H del ciclo libero nominale da results/nominali/free_<case>.json, se esiste."""
     p = os.path.join(NOMINALI, f"free_{case}.json")
     if not os.path.exists(p):
         return None
@@ -209,6 +219,7 @@ def _nominal_H(case):
         return json.load(f).get("H_pct")
 
 
+# cicli dY(u) nominali: molla fissa, due livelli nei due ordini, attuazione diretta
 def fig_hysteresis(summary, campaign, out, level):
     other = "low" if level == "high" else "high"
     panels = (("fixed", "nominal_fixed_free", "fixed", summary["configs"]["fixed"]["H_nominal_pct"]),
@@ -245,6 +256,7 @@ def fig_hysteresis(summary, campaign, out, level):
     return found
 
 
+# F(t) e k(t) delle prove di contatto nominali su rigido e soffice
 def fig_contact_time(campaign, out, level):
     ref, b = NOMINAL_PARAMS["force_ref"] * 1e3, NOMINAL_PARAMS["force_band"]
     fig, axes = plt.subplots(2, 2, figsize=(9.2, 5.2), sharex="col")

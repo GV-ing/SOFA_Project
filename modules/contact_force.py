@@ -1,25 +1,21 @@
-"""Lettura della forza di contatto dalle forze dei vincoli del constraint solver.
+"""
+modules/contact_force.py
 
-Perche' non il campo ``lambda`` dei MechanicalObject: sui modelli di collisione mappati
-(oggetto soffice, tubo) ``lambda`` puo' contenere la reazione contata due volte
-(verificato durante lo sviluppo: rapporto esattamente 2.00
-rispetto alla forza ricavata dalla cinematica). Le ``constraintForces`` del solver sono
-invece la sorgente primaria e coincidono con il riferimento entro lo 0.5% sia sul rigido
-(equilibrio) sia sul soffice (cinematica).
+Lettura della forza normale di contatto dalle constraintForces del constraint solver.
 
-Convenzioni verificate in SOFA 26.06 con FreeMotionAnimationLoop:
-  * i valori dei vincoli sono IMPULSI [N*s]: forza = valore / dt;
-  * il CableConstraint occupa una riga, con valore uguale all'impulso imposto (T*dt);
-  * ogni punto di contatto con FrictionContactConstraint occupa 3 righe (n, t1, t2):
-    la forza normale e' la prima del blocco.
+Con FreeMotionAnimationLoop i valori dei vincoli sono impulsi [N*s] (forza = impulso / dt).
+Il CableConstraint occupa una riga, con valore uguale all'impulso imposto T*dt; ogni punto di
+contatto con FrictionContactConstraint occupa tre righe (n, t1, t2) e la normale è la prima.
 """
 
 import numpy as np
 
+# nomi dei componenti in main_scene.py
 SOLVER_NAME = "ConstraintSolver"
 CABLE_PATH = ("NitinolTube", "Tendon", "tendonCable")
 
 
+# CableConstraint della scena (None se non c'è)
 def _find_cable(root):
     node = root
     for name in CABLE_PATH[:-1]:
@@ -27,8 +23,8 @@ def _find_cable(root):
     return node.getObject(CABLE_PATH[-1]) if node is not None else None
 
 
+# indice della riga del cavo: quella uguale all'impulso imposto, altrimenti l'ultima
 def _cable_row(forces, cable_impulse):
-    """Indice della riga del cavo: quella uguale all'impulso imposto, altrimenti l'ultima."""
     if cable_impulse is not None and abs(cable_impulse) > 0.0:
         diff = np.abs(forces - cable_impulse)
         idx = int(np.argmin(diff))
@@ -37,8 +33,8 @@ def _cable_row(forces, cable_impulse):
     return forces.size - 1
 
 
+# impulsi normali di contatto [N*s], uno per punto di contatto
 def contact_normal_impulses(root):
-    """Impulsi normali di contatto [N*s] (uno per punto di contatto)."""
     solver = root.getObject(SOLVER_NAME)
     if solver is None:
         raise RuntimeError(f"Constraint solver '{SOLVER_NAME}' non trovato")
@@ -48,6 +44,7 @@ def contact_normal_impulses(root):
     if not np.all(np.isfinite(forces)):
         raise ValueError("constraintForces contiene valori non finiti")
 
+    # tolta la riga del cavo, restano blocchi di tre righe per punto di contatto
     cable = _find_cable(root)
     has_cable = cable is not None
     if has_cable:
@@ -61,8 +58,8 @@ def contact_normal_impulses(root):
     return forces[0::3]
 
 
+# forza normale di contatto totale [N]: somma degli impulsi normali / dt
 def read_contact_force(root):
-    """Forza normale di contatto totale [N] (somma delle normali / dt)."""
     dt = float(root.dt.value)
     if not np.isfinite(dt) or dt <= 0.0:
         raise ValueError(f"dt non valido: {dt}")

@@ -1,22 +1,19 @@
-# modules/metrics.py
-"""Metriche del Progetto 5 (pure, testabili senza SOFA).
+"""
+modules/metrics.py
 
-Isteresi H (traccia):
-    H = max |dY_load(u) - dY_unload(u)| / dY_max * 100   [%]
-    confronto a pari u su un ciclo; dY_max = deflessione massima a fine carico.
-    Riferimento: attuazione diretta (k = 50 N/mm) -> si riporta anche H / H_diretta.
+Metriche del Progetto 5 (solo numpy, senza SOFA).
 
-Stabilita' del contatto (traccia):
-    forza che oscilla meno del 30% (picco-picco) rispetto alla media per 5 s,
-    senza perdita di contatto.
-Forza mantenuta (assistente del corso): 5 mN +/-10 %, cioe' F in 4.5-5.5 mN in tutta la finestra.
+    isteresi            H = max |dY_carico(u) - dY_scarico(u)| / dY_max * 100   [%]
+                        a pari u su un ciclo, dY_max = deflessione massima a fine carico
+    contatto stabile    oscillazione picco-picco < 30 % della media per 5 s, senza perdita
+                        di contatto; in_band indica se F resta sempre nella banda indicata
 """
 
 import numpy as np
 
 
+# ordina per u e fa la media dei valori con u ripetuto (carrello fermo)
 def _branch(u, y):
-    """Ordina per u e media i valori con u ripetuto (es. fermi del carrello)."""
     order = np.argsort(u, kind="stable")
     u_s, y_s = u[order], y[order]
     uniq, inv = np.unique(u_s, return_inverse=True)
@@ -24,11 +21,9 @@ def _branch(u, y):
     return uniq, y_mean
 
 
+# indice di isteresi H [%] da un ciclo con fasi load / hold / unload; restituisce anche
+# lo scarto massimo, la u dove si trova, dY_max e u_max
 def hysteresis_H(u, dY, phase, n_grid=400):
-    """Indice di isteresi H [%] da un ciclo con fasi 'load' / 'hold' / 'unload'.
-
-    Restituisce un dizionario con H_pct, dY_max, u del massimo scarto e i rami interpolati.
-    """
     u = np.asarray(u, dtype=float)
     dY = np.asarray(dY, dtype=float)
     phase = np.asarray(phase)
@@ -41,6 +36,7 @@ def hysteresis_H(u, dY, phase, n_grid=400):
     if load.sum() < 3 or unload.sum() < 3:
         raise ValueError("Servono almeno 3 campioni sia in carico sia in scarico")
 
+    # rami di carico e scarico interpolati sullo stesso intervallo di u
     uL, yL = _branch(u[load], dY[load])
     uU, yU = _branch(u[unload], dY[unload])
     lo, hi = max(uL[0], uU[0]), min(uL[-1], uU[-1])
@@ -62,11 +58,9 @@ def hysteresis_H(u, dY, phase, n_grid=400):
     }
 
 
+# stabilità del contatto negli ultimi duration secondi della fase hold;
+# band = (F_min, F_max) [N] per il controllo della banda
 def contact_stability(t, F, phase, duration=5.0, ptp_max=0.30, loss_force=1e-4, band=None):
-    """Stabilita' del contatto sugli ultimi `duration` secondi della fase 'hold'.
-
-    band = (F_min, F_max) [N]: banda ammessa; in_band e' vero se tutta la finestra vi rientra.
-    """
     t = np.asarray(t, dtype=float)
     F = np.asarray(F, dtype=float)
     phase = np.asarray(phase)

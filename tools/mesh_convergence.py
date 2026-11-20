@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
-# tools/mesh_convergence.py  -  SOFA v26.06 / SofaPython3 / Python 3.12
 """
-Studio di convergenza della mesh del tubo (TetrahedronFEMForceField).
+tools/mesh_convergence.py
 
-Per ogni passo assiale h_flex della parte flessibile (mesh graduata: pochi elementi
-sull'albero vincolato, superfici visiva/collisione separate e piu' grossolane):
-  1. CAVO  : tensione T sul CableConstraint (carico reale del progetto, momento T*yt)
-             teoria: delta = T*yt*L^2 / (2*E*I)
-  2. FORZA : forza laterale F sui nodi di punta (ConstantForceField)
-             teoria: delta = F*L^3 / (3*E*I)
-Riporta il rapporto SOFA/teoria, l'estrapolazione di Richardson sulle tre mesh
-piu' fitte, il tempo medio per passo (moto libero e, se richiesto, con contatto
-rigido) e una stima della durata della campagna Monte Carlo.
+Studio di convergenza della mesh del tubo (TetrahedronFEMForceField) al variare del passo
+assiale h_flex della parte flessibile. Due prove statiche confrontate con la trave di
+Eulero-Bernoulli:
 
-Convenzione verificata durante lo sviluppo: il valore del CableConstraint e'
-un impulso, quindi si impone T*dt.
+    cavo    tensione T sul CableConstraint (momento T*yt)    delta = T*yt*L^2 / (2*E*I)
+    forza   forza laterale F sui nodi di punta               delta = F*L^3 / (3*E*I)
 
-Esecuzione (cartella SOFA_Project, variabili d'ambiente del README):
+Riporta il rapporto SOFA/teoria, l'estrapolazione di Richardson sulle tre mesh più fitte, il
+tempo medio per passo (moto libero e, se richiesto, con contatto rigido) e una stima della
+durata del Monte Carlo.
+
+Uso (cartella SOFA_Project, dopo source env.sh):
     python3.12 -u tools/mesh_convergence.py --contact-timing
     python3.12 -u tools/mesh_convergence.py --hflex 0.8 0.4 0.3 0.2 --contact-timing
 """
@@ -30,20 +27,22 @@ import time
 
 import numpy as np
 
+# cartella del progetto nel path per importare modules
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
 
-import Sofa.Core  # noqa: E402
-import Sofa.Simulation  # noqa: E402
+import Sofa.Core
+import Sofa.Simulation
 
-import main_scene  # noqa: E402
-from modules.config import NOMINAL_PARAMS  # noqa: E402
+import main_scene
+from modules.config import NOMINAL_PARAMS
 
-# Campagna attuale: 4 scenari x (1 nominale + 20 realizzazioni), 1600 passi a caso
+# casi e passi per caso usati nella stima della durata del Monte Carlo
 MC_CASES = 4 * 21
 MC_STEPS_PER_CASE = 1600
 
 
+# costruisce la scena con il carico imposto dallo script (cavo o forza in punta)
 def build(h_flex, n_theta, contact_object, dt, load):
     p = NOMINAL_PARAMS.copy()
     p.update(contact_object=contact_object, dt=dt, switched_mode=False, live_plot=False,
@@ -52,7 +51,7 @@ def build(h_flex, n_theta, contact_object, dt, load):
     main_scene.createScene(root, p)
 
     ctrl = root.getObject("ActuationController")
-    ctrl.update_actuation_physics = lambda _dt: None  # carico imposto dallo script
+    ctrl.update_actuation_physics = lambda _dt: None  # la molla del controller non agisce
     tube = root.getChild("NitinolTube")
     cable = tube.getChild("Tendon").getObject("tendonCable")
     cable.value.value = [0.0]
@@ -71,8 +70,8 @@ def build(h_flex, n_theta, contact_object, dt, load):
     return root, ctrl, cable, cff, info
 
 
+# rampa del carico, mantenimento e media di dY alla fine; misura il tempo per passo
 def run_static(root, ctrl, cable, cff, magnitude, t_ramp, t_hold, t_avg):
-    """Rampa del carico, mantenimento, media di dY; misura il tempo per passo."""
     dt = float(root.dt.value)
     n_ramp = max(1, int(round(t_ramp / dt)))
     n_hold = max(1, int(round(t_hold / dt)))
@@ -83,7 +82,7 @@ def run_static(root, ctrl, cable, cff, magnitude, t_ramp, t_hold, t_avg):
     for i in range(n_ramp + n_hold):
         s = min(1.0, (i + 1) / n_ramp)
         if cff is None:
-            cable.value.value = [float(s * magnitude) * dt]  # impulso -> forza s*T
+            cable.value.value = [float(s * magnitude) * dt]  # impulso, forza s*T
         else:
             cff.totalForce.value = [0.0, float(s * magnitude), 0.0]
         Sofa.Simulation.animate(root, dt)
@@ -94,8 +93,8 @@ def run_static(root, ctrl, cable, cff, magnitude, t_ramp, t_hold, t_avg):
     return float(dys.mean()), float(np.ptp(dys)), t_step
 
 
+# tempo medio per passo con oggetto rigido e contatto attivo (tendine a T)
 def time_contact(h_flex, n_theta, dt, T, n_steps):
-    """Tempo per passo con oggetto rigido e contatto attivo (tendine a T)."""
     root, ctrl, cable, _, _ = build(h_flex, n_theta, "rigid", dt, "cable")
     for _ in range(int(round(1.0 / dt))):  # porta la punta in contatto
         cable.value.value = [T * dt]
@@ -107,8 +106,8 @@ def time_contact(h_flex, n_theta, dt, T, n_steps):
     return (time.perf_counter() - t0) / n_steps
 
 
+# estrapolazione di Richardson dalle ultime tre mesh: q(h) = q_inf - C*h^p
 def richardson(h, q):
-    """Estrapola q(h->0) dalle ultime tre mesh: q(h) = q_inf - C*h^p (h anche non uniforme)."""
     if len(q) < 3:
         return None, None
     (h1, h2, h3), (q1, q2, q3) = h[-3:], q[-3:]
@@ -121,6 +120,7 @@ def richardson(h, q):
     def g(p):
         return (h1 ** p - h2 ** p) / (h2 ** p - h3 ** p) - target
 
+    # ordine p per bisezione
     lo, hi = 0.05, 8.0
     if g(lo) * g(hi) > 0:
         return None, None
@@ -155,6 +155,7 @@ def main():
     ap.add_argument("--csv", default="mesh_convergence.csv")
     a = ap.parse_args()
 
+    # deflessioni teoriche della trave a sbalzo
     p = NOMINAL_PARAMS
     L, yt = p["length_flex"], p["yt_offset"]
     r_o = p["od"] / 2.0
@@ -164,6 +165,7 @@ def main():
     d_force = a.F * L ** 3 / (3.0 * EI)
     print(f"\nTeoria: cavo T={a.T:g} N -> {d_cable:.4f} mm ;  forza F={a.F:g} N -> {d_force:.4f} mm")
 
+    # prove per ogni passo h_flex, dalla mesh più grossolana alla più fitta
     rows = []
     for h in sorted(a.hflex, reverse=True):
         n_x = int(round(L / h))  # elementi sulla parte flessibile
@@ -196,7 +198,7 @@ def main():
             msg += "  [ATTENZIONE: non ancora statico, aumentare --hold]"
         print(msg)
 
-    # ---------------- Riepilogo ----------------
+    # riepilogo
     print("\n=== Riepilogo (rapporto SOFA/teoria, 1 = trave di Eulero-Bernoulli) ===")
     print("  n_flex | h [mm] |  nodi | cavo  | forza | ms/passo libero | ms/passo contatto | stima MC [h]")
     for r in rows:
@@ -222,6 +224,7 @@ def main():
             print(f"  Richardson {label}: non applicabile (servono 3 mesh con raffinamento "
                   f"costante e convergenza monotona)")
 
+    # mesh più grossolana con errore sul cavo entro la tolleranza
     ok = [r for r in rows if abs(r["ratio_cable"] - 1.0) <= a.tol]
     if ok:
         best = ok[0]

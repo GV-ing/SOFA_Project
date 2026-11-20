@@ -1,28 +1,26 @@
-# modules/controller.py
-"""Controller da tastiera e autonomo del tubo a tendine con molla in serie (SofaPython3).
+"""
+modules/controller.py
 
-Comandi (traccia: carico/scarico, reset, manuale/autonomo; a ogni comando stampa u, T, dLs, punta):
-    Freccia SU / U / +   carico   (+u_step)          Freccia GIU' / D / -   scarico (-u_step)
-    R                    reset                        M / A                  manuale <-> autonomo
+Controller del tubo a tendine (Sofa.Core.Controller): modo manuale da tastiera, ciclo
+autonomo, molla in serie, commutazione di k al contatto e regolazione della forza di contatto.
+A ogni comando stampa u, T, dLs e la posizione della punta.
 
-Contatto (modules/contact_control.py): a F >= 5 mN lo stato passa a CONTATTO, k commuta
-(configurazione b) e il regolatore di forza tiene F a 5 mN +/-10 % finche' il contatto dura.
-  * Modo manuale: in contatto la freccia SU e' ignorata (la forza e' regolata); la freccia GIU'
-    rilascia: il regolatore si disarma e il carrello arretra di u_step. La freccia SU lo riarma.
-    Il reset lo disarma (la forza decade senza che il regolatore riporti la punta sull'oggetto).
-  * Ciclo autonomo (macchina a stati):
-      'load'     u cresce a auto_rate; se si rileva il contatto -> 'regulate'; in moto libero si
-                 inverte a T >= auto_T_reverse o a u = u_max -> 'hold' (auto_hold_s) o 'unload'
-      'regulate' regolazione di forza; quando F resta in banda a motore fermo per
-                 contact_settle_s -> 'hold' (se il contatto si perde torna a 'load')
-      'hold'     finestra di hold_duration s in contatto (regolatore attivo) o auto_hold_s in
-                 moto libero -> 'unload'
-      'unload'   u scende a auto_rate fino a 0 -> 'done' (o 'load' se auto_repeat); un nuovo
-                 rilevamento durante lo scarico non riattiva la regolazione
-    La fase e' registrata per separare carico e scarico nel calcolo di H.
+Tasti:
+    freccia su / U / +      carico (+u_step)
+    freccia giù / D / -     scarico (-u_step)
+    R                       reset
+    M / A                   manuale <-> autonomo
+In modo manuale, durante il contatto la freccia su è ignorata finché il regolatore è attivo;
+la freccia giù disattiva il regolatore e arretra il carrello, la freccia su lo riattiva.
 
-Convenzioni SOFA 26.06 verificate durante lo sviluppo: al CableConstraint si impone l'impulso T*dt;
-cambiare youngModulus richiede reinit() del TetrahedronFEMForceField.
+Fasi del ciclo autonomo:
+    load        u cresce a auto_rate; al contatto passa a regulate; in moto libero si ferma
+                a T = auto_T_reverse o a u = u_max e passa a hold
+    regulate    regolazione della forza; dopo contact_settle_s con F in banda a motore fermo
+                passa a hold (se il contatto si perde torna a load)
+    hold        finestra di hold_duration s in contatto (regolatore attivo) o pausa di
+                auto_hold_s in moto libero, poi unload
+    unload      u scende a auto_rate fino a 0, poi done (o load se auto_repeat)
 """
 
 import logging
@@ -34,6 +32,7 @@ import Sofa.Core
 from modules.contact_control import ContactState, ForceRegulator
 from modules.spring_model import SeriesSpring
 
+# grandezze registrate a ogni passo
 HISTORY_FIELDS = ("t", "phase", "contact", "u", "u_target", "u1", "dLs", "T", "k", "z",
                   "E", "tip_x", "tip_y", "tip_z", "dY", "F_contact")
 
@@ -42,6 +41,7 @@ class TendonSpringController(Sofa.Core.Controller):
 
   def __init__(self, *args, **kwargs):
     super().__init__(*args, **kwargs)
+    # componenti della scena passati da main_scene.py
     self.root = kwargs.get("root")
     self.tube_meca = kwargs.get("tube_meca")
     self.fem_ff = kwargs.get("fem_ff")
@@ -54,6 +54,7 @@ class TendonSpringController(Sofa.Core.Controller):
     if not np.isfinite(self.force_scale) or self.force_scale <= 0.0:
       raise ValueError("force_scale deve essere un fattore positivo e finito")
 
+    # stato dell'attuazione
     self.spring = SeriesSpring(self.params)
     self.contact = ContactState(self.params)
     self.regulator = ForceRegulator(self.params)
@@ -67,28 +68,27 @@ class TendonSpringController(Sofa.Core.Controller):
     self.contact_read_errors = 0
     self.time = 0.0
 
+    # stato del ciclo autonomo
     self.autonomous_mode = False
     self.phase = "manual"
     self.hold_timer = 0.0
     self.hold_s = 0.0
     self.settle_timer = 0.0
-    self.manual_force_armed = True   # modo manuale: regolazione attiva in contatto (SU / GIU')
+    self.manual_force_armed = True   # modo manuale: regolazione attiva al contatto
 
     self.initial_tip = None
     self.history = {name: [] for name in HISTORY_FIELDS}
-    self.listeners = []   # callable(sample: dict) chiamati a ogni passo (grafici live)
+    self.listeners = []   # funzioni chiamate a ogni passo con il campione (grafici, CSV)
     self._warned_missing_cable_displacement = False
 
-  # ------------------------------------------------------------------ misure
+  # posizione media dei nodi di punta [mm]
   def get_tip_position(self):
-    """Posizione media dei nodi di punta [mm]."""
     pos = self.tube_meca.position.value
     return np.mean(pos[self.tip_node_indices], axis=0)
 
+  # spostamento del tendine a valle della molla u1 [mm], dal displacement del CableConstraint
   def get_tendon_displacement(self):
-    """Spostamento del tendine a valle della molla u1 [mm] (CableConstraint.displacement)."""
     try:
-      # In SoftRobots 26.06 'displacement' e' uno scalare: np.ravel gestisce scalare e vettore
       return max(0.0, float(np.ravel(self.cable.displacement.value)[0]))
     except (AttributeError, IndexError, TypeError, ValueError):
       if not self._warned_missing_cable_displacement:
@@ -96,13 +96,13 @@ class TendonSpringController(Sofa.Core.Controller):
         self._warned_missing_cable_displacement = True
       return 0.0
 
+  # forza normale di contatto [N]; un errore di lettura viene contato e la forza vale 0
   def read_contact_force(self):
-    """Forza normale di contatto [N] dal provider (modules/contact_force.py)."""
     if self.contact_force_provider is None:
       return 0.0
     try:
       force = float(self.contact_force_provider(self.root))
-    except Exception as exc:  # errore di lettura: segnalato, non confuso con "nessun contatto"
+    except Exception as exc:
       self.contact_read_errors += 1
       if self.contact_read_errors == 1:
         logging.error("Lettura forza di contatto fallita (%s); uso 0 N. "
@@ -112,7 +112,7 @@ class TendonSpringController(Sofa.Core.Controller):
       raise ValueError(f"Forza di contatto non valida: {force}")
     return force * self.force_scale
 
-  # ------------------------------------------------------------------ stampa
+  # stampa u, T, dLs, k, posizione della punta e forza di contatto
   def print_state_feedback(self):
     tip = self.get_tip_position()
     dY = float(tip[1]) - float(self.initial_tip[1]) if self.initial_tip is not None else 0.0
@@ -124,36 +124,35 @@ class TendonSpringController(Sofa.Core.Controller):
         f"{' | CONTATTO' if self.contact.in_contact else ''}"
     )
 
-  # ------------------------------------------------------------------ fisica
+  # cambia il modulo di Young del FEM; reinit() ricalcola la rigidezza
   def _set_young_modulus(self, E):
     if abs(E - self.E_current) > 1e-9:
       self.fem_ff.youngModulus.value = [E]
-      # TetrahedronFEMForceField NON ricalcola la rigidezza al solo cambio del Data:
-      # serve reinit() (verificato durante lo sviluppo: rapporto 1.000 -> 1.185).
       self.fem_ff.reinit()
       self.E_current = E
 
+  # calcola T con il modello della molla, sceglie E di carico o scarico e applica T al cavo
   def update_actuation_physics(self, dt):
-    """Molla in serie -> tensione T sul cavo; E di carico o scarico secondo il verso di u."""
     self.u1 = self.get_tendon_displacement()
     self.T = self.spring.step(self.u, self.u1, dt)
     self.delta_Ls = self.spring.dL_s
     self._set_young_modulus(
         self.params["E_load"] if self.spring.direction >= 0 else self.params["E_unload"])
-    # Con FreeMotionAnimationLoop il valore del vincolo e' un IMPULSO: si impone T*dt.
+    # il valore del CableConstraint è un impulso: T*dt
     self.cable.value.value = [self.T * dt]
 
-  # ------------------------------------------------------------------ logica
+  # True se in questo passo il motore è comandato dal regolatore di forza
   def _regulating(self):
-    """True se in questo passo il motore e' comandato dal regolatore di forza."""
     if self.autonomous_mode:
       return self.phase == "regulate" or (self.phase == "hold" and self.contact.in_contact)
     return self.contact.in_contact and self.manual_force_armed
 
+  # True se F è dentro la banda force_ref +/- force_band
   def _in_band(self):
     return (abs(self.contact_force_N - self.regulator.F_ref)
             <= self.params["force_band"] * self.regulator.F_ref)
 
+  # un passo della macchina a stati del ciclo autonomo
   def _autonomous_step(self, dt):
     rate = self.params["auto_rate"]
     if self.phase == "load":
@@ -183,12 +182,13 @@ class TendonSpringController(Sofa.Core.Controller):
       if self.u <= 1e-9 and self.u_target <= 0.0:
         self.phase = "load" if self.params["auto_repeat"] else "done"
 
+  # pausa a fine carico (moto libero) o finestra di stabilità (contatto)
   def _enter_hold(self, duration):
-    """Pausa a fine carico (moto libero) o finestra di stabilita' (contatto)."""
     self.hold_s = float(duration)
     self.hold_timer = 0.0
     self.phase = "hold" if self.hold_s > 0 else "unload"
 
+  # blocca il riferimento di u e fa ripartire il regolatore
   def _enter_regulation(self):
     self.u_target = self.u
     self.regulator.reset()
@@ -196,6 +196,7 @@ class TendonSpringController(Sofa.Core.Controller):
     if self.autonomous_mode:
       self.phase = "regulate"
 
+  # prima del passo: aggiorna u (regolatore o rampa verso u_target) e applica T al cavo
   def onAnimateBeginEvent(self, event):
     dt = float(self.root.dt.value)
     if self.initial_tip is None:
@@ -212,6 +213,7 @@ class TendonSpringController(Sofa.Core.Controller):
       self.u += float(np.clip(self.u_target - self.u, -max_step, max_step))
     self.update_actuation_physics(dt)
 
+  # dopo il passo: legge la forza, aggiorna lo stato di contatto e registra il campione
   def onAnimateEndEvent(self, event):
     dt = float(self.root.dt.value)
     self.time += dt
@@ -232,12 +234,12 @@ class TendonSpringController(Sofa.Core.Controller):
     for listener in list(self.listeners):
       try:
         listener(sample)
-      except Exception as exc:  # un grafico che fallisce non deve fermare la fisica
+      except Exception as exc:  # il listener che va in errore viene tolto
         logging.warning("Listener disattivato dopo errore: %s", exc)
         self.listeners.remove(listener)
 
+  # passaggio libero <-> contatto: k commuta (config. b) e si attiva il regolatore
   def _on_contact_change(self):
-    """Transizione LIBERO <-> CONTATTO: k commuta (config. b) e si arma il regolatore."""
     k_old = self.spring.k
     self.spring.set_contact(self.contact.in_contact)
     if self.contact.in_contact:
@@ -253,7 +255,7 @@ class TendonSpringController(Sofa.Core.Controller):
             f"{self.spring.k:.2f} N/mm")
       self.regulator.reset()
 
-  # ------------------------------------------------------------------ comandi
+  # avvia il ciclo autonomo dalla posizione attuale
   def start_autonomous_cycle(self, hold_s=None, repeat=None):
     if hold_s is not None:
       self.params["auto_hold_s"] = float(hold_s)
@@ -265,21 +267,21 @@ class TendonSpringController(Sofa.Core.Controller):
     if self.contact.in_contact:
       self._enter_regulation()
 
+  # torna al modo manuale
   def stop_autonomous_cycle(self):
     self.autonomous_mode = False
     self.phase = "manual"
     self.u_target = self.u
     self.regulator.reset()
 
+  # riporta u a 0 e azzera la molla
   def reset(self):
     self.autonomous_mode = False
     self.phase = "manual"
     self.u = self.u_target = 0.0
     self.spring.reset()
-    # Lo stato di contatto non si azzera: la forza decade in pochi passi e la perdita del
-    # contatto viene rilevata normalmente (niente falso "contatto rilevato" durante il decadimento).
-    # Il regolatore resta disarmato fino alla prossima freccia SU, altrimenti riporterebbe la
-    # punta sull'oggetto mentre la forza decade.
+    # lo stato di contatto non si azzera: si aggiorna da solo quando la forza scende;
+    # il regolatore resta disattivato fino alla prossima freccia su
     self.spring.set_contact(self.contact.in_contact)
     self.regulator.reset()
     self.manual_force_armed = False
@@ -287,6 +289,7 @@ class TendonSpringController(Sofa.Core.Controller):
     self.cable.value.value = [0.0]
     self._set_young_modulus(self.params["E_load"])
 
+  # comandi da tastiera ("\x13" e "\x15" sono le frecce su e giù in runSofa)
   def onKeypressedEvent(self, event):
     key = str(event.get("key", ""))
     step = self.params["u_step"]
@@ -301,7 +304,7 @@ class TendonSpringController(Sofa.Core.Controller):
       if self._regulating():
         print("[CONTROLLER] In contatto la forza e' regolata a "
               f"{self.regulator.F_ref * 1e3:.1f} mN: carico ignorato (freccia giu' per rilasciare)")
-      elif self.contact.in_contact:              # dopo un rilascio: la regolazione riparte
+      elif self.contact.in_contact:              # dopo un rilascio: riattiva il regolatore
         self.manual_force_armed = True
         self._enter_regulation()
         print("[CONTROLLER] Regolazione di forza riattivata")

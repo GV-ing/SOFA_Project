@@ -5,3 +5,5 @@ results/gui_*.csv
 *.log
 nohup.out
 *.zip
+image/
+*.mp4

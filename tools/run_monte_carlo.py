@@ -1,22 +1,22 @@
 #!/usr/bin/env python3
-# tools/run_monte_carlo.py  -  SOFA v26.06 / SofaPython3 / Python 3.12
 """
-Campagna Monte Carlo del Progetto 5, eseguita in parallelo (un processo SOFA per caso).
+tools/run_monte_carlo.py
 
-Casi: (nominale + N realizzazioni) x {fixed, switched} x {free, rigid, soft} + diretta nominale.
-Con N = 20: 127 casi. Ogni caso completato viene aggiunto subito a cases.jsonl: se la campagna
-si interrompe, rilanciando lo stesso comando con --resume riparte dai casi mancanti.
+Campagna Monte Carlo del Progetto 5 in parallelo (un processo SOFA per caso).
+Casi: (nominale + N realizzazioni) x {fixed, switched} x {free, rigid, soft} + diretta nominale,
+cioè 127 casi con N = 20. Ogni caso completato viene scritto subito in cases.jsonl: con
+--resume la campagna riparte dai casi mancanti.
 
-Output in --outdir:
-  realizations.json   perturbazioni campionate (seed riproducibile)
-  cases.jsonl         un risultato per caso (metriche o errore)
-  series/<caso>.csv   cronologie complete (per le figure)
-  summary.json        statistiche, tornado, verifica dei target
+File in --outdir:
+    realizations.json   perturbazioni campionate (seed riproducibile)
+    cases.jsonl         un risultato per caso (metriche o errore)
+    series/<caso>.csv   serie temporali
+    summary.json        statistiche, tornado e verifica dei target
 
-Esecuzione (cartella SOFA_Project, source env.sh):
-    python3.12 -u tools/run_monte_carlo.py --count 1 --tests free      # prova rapida (~5 min)
-    python3.12 -u tools/run_monte_carlo.py                              # campagna completa
-    python3.12 -u tools/run_monte_carlo.py --resume --outdir results/mc_2026   # riprende
+Uso (cartella SOFA_Project, dopo source env.sh):
+    python3.12 -u tools/run_monte_carlo.py --count 1 --tests free
+    python3.12 -u tools/run_monte_carlo.py
+    python3.12 -u tools/run_monte_carlo.py --resume --outdir results/mc_2026
 """
 
 import argparse
@@ -28,14 +28,16 @@ import sys
 import time
 from concurrent.futures import ProcessPoolExecutor, as_completed
 
+# cartella del progetto nel path per importare modules
 PROJECT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, PROJECT_DIR)
 
-from modules.config import MC_NUM_REALIZATIONS, NOMINAL_PARAMS  # noqa: E402
-from modules.mc_worker import run_task  # noqa: E402
-from modules.monte_carlo import analyze, build_tasks, sample_realizations  # noqa: E402
+from modules.config import MC_NUM_REALIZATIONS, NOMINAL_PARAMS
+from modules.mc_worker import run_task
+from modules.monte_carlo import analyze, build_tasks, sample_realizations
 
 
+# legge i casi già completati da cases.jsonl
 def load_done(path):
     done = []
     if os.path.exists(path):
@@ -46,11 +48,12 @@ def load_done(path):
                     continue
                 try:
                     done.append(json.loads(line))
-                except json.JSONDecodeError:  # riga troncata (crash durante la scrittura)
+                except json.JSONDecodeError:  # riga troncata: il caso viene rieseguito
                     print(f"  riga non valida in {path} ignorata: il caso verra' rieseguito")
     return done
 
 
+# stampa il riepilogo della campagna
 def print_summary(s):
     print("\n=== Riepilogo Monte Carlo ===")
     if s.get("H_direct_nominal_pct") is not None:
@@ -118,6 +121,7 @@ def main():
     real_path = os.path.join(outdir, "realizations.json")
     cases_path = os.path.join(outdir, "cases.jsonl")
 
+    # realizzazioni (con --resume devono coincidere con quelle della campagna da riprendere)
     if not a.resume and os.path.exists(cases_path):
         sys.exit(f"{cases_path} esiste gia': usare --resume o un altro --outdir")
     realizations = sample_realizations(seed=a.seed, count=a.count)
@@ -129,6 +133,7 @@ def main():
     with open(real_path, "w", encoding="utf-8") as f:
         json.dump({"seed": a.seed, "count": a.count, "realizations": realizations}, f, indent=2)
 
+    # casi da eseguire
     tasks = [t for t in build_tasks(realizations, os.path.join(outdir, "series"))
              if t["test"] in a.tests and t["config"] in a.configs]
     for t in tasks:
@@ -140,8 +145,7 @@ def main():
     selected = {t["case_id"] for t in tasks}
     done_ids = {r["case_id"] for r in done if "metrics" in r}
     if a.rerun:
-        # da rifare: i casi selezionati non ancora rieseguiti con questa etichetta
-        # (cosi' una riesecuzione interrotta riprende senza ripetere i casi gia' rifatti)
+        # con --rerun restano da fare i casi selezionati non ancora rieseguiti con la stessa --tag
         redone = {r["case_id"] for r in done
                   if "metrics" in r and a.tag and r.get("tag") == a.tag}
         done_ids = (done_ids - selected) | (redone & selected)
@@ -149,7 +153,8 @@ def main():
     print(f"Campagna in {outdir}\n  casi totali {len(tasks)}, gia' fatti {len(done_ids)}, "
           f"da eseguire {len(todo)}, processi {a.workers}")
 
-    results = [r for r in done if "metrics" in r]  # in ordine: il piu' recente prevale
+    # esecuzione in parallelo: un processo nuovo per ogni caso
+    results = [r for r in done if "metrics" in r]  # l'ultimo risultato di un caso prevale
     t0 = time.time()
     if todo:
         ctx = mp.get_context("spawn")
@@ -161,7 +166,7 @@ def main():
                 t = futures[fut]
                 try:
                     r = fut.result()
-                except Exception as exc:  # crash del processo figlio
+                except Exception as exc:  # processo figlio terminato in modo anomalo
                     r = {k: t[k] for k in ("case_id", "realization", "config", "test")}
                     r["error"] = f"processo terminato: {exc}"
                 log.write(json.dumps(r) + "\n")

@@ -1,28 +1,18 @@
-# modules/contact_control.py
-"""Stato di contatto e regolazione della forza di contatto. Puro Python (testabile).
+"""
+modules/contact_control.py
 
-Indicazioni dell'assistente del corso per il Progetto 5: la forza di contatto va mantenuta
-attivamente a 5 mN per tutta la durata del contatto, con margine +/-10 % (4.5-5.5 mN).
+Stato di contatto e regolazione della forza di contatto (solo Python, senza SOFA).
 
-ContactState: macchina a stati del rilevamento (unico punto da cambiare se cambia la regola)
+ContactState:
+    LIBERO   -> CONTATTO   quando F >= F_contact_th
+    CONTATTO -> LIBERO     quando F <  contact_loss_force
+    Durante il contatto k resta fisso; si torna in LIBERO solo quando il contatto si perde.
 
-    LIBERO   --[F >= F_contact_th (5 mN, traccia)]-->      CONTATTO   (k commuta)
-    CONTATTO --[F <  contact_loss_force (0.1 mN)]-->        LIBERO     (k torna al valore libero)
-
-  5 mN e' sia la soglia di rilevamento sia la forza da mantenere: confrontare F con 5 mN a ogni
-  passo farebbe commutare k di continuo. Per questo durante il contatto k resta fisso e si torna
-  in LIBERO solo quando il contatto si perde.
-
-ForceRegulator: regolazione a banda morta sul motore.
-  * |F - F_ref| > start: il regolatore interviene e impone alla tensione dT/dt = -gain*(F - F_ref);
-    la velocita' del motore e' dT/dt divisa per la rigidezza locale della molla
-    (SeriesSpring.stiffness, che include l'isteresi di Dahl), limitata a v_max;
-  * |F - F_ref| < stop: il motore si ferma. A u fermo la forza resta costante, quindi non si
-    innesca il ciclo limite che un PI continuo avrebbe con l'isteresi di Dahl (circa 1.7 N di T a
-    ogni inversione del motore).
-  Lavorare su dT/dt rende il guadagno indipendente da k e dallo stato di Dahl: resta solo la
-  rigidezza del contatto (dF/dT, circa 10 volte maggiore sul rigido che sul soffice). Guadagni
-  e velocita' sono unici per tutte le configurazioni, realizzazioni e oggetti.
+ForceRegulator:
+    regolatore a banda morta sul motore. Si attiva se |F - F_ref| > start e si ferma se
+    |F - F_ref| < stop. Quando è attivo impone dT/dt = -gain * (F - F_ref); la velocità del
+    motore è dT/dt diviso la rigidezza locale della molla (SeriesSpring.stiffness), limitata
+    a v_max.
 """
 
 
@@ -37,8 +27,8 @@ class ContactState:
     def reset(self):
         self.in_contact = False
 
+    # aggiorna lo stato con la forza misurata [N]; restituisce True se lo stato cambia
     def update(self, F):
-        """Aggiorna lo stato con la forza misurata [N]. Restituisce True se lo stato cambia."""
         before = self.in_contact
         if self.in_contact:
             self.in_contact = F >= self.F_loss
@@ -64,8 +54,8 @@ class ForceRegulator:
     def reset(self):
         self.active = False
 
+    # spostamento del motore [mm] in questo passo, data la forza misurata F [N]
     def step(self, F, spring, dt):
-        """Spostamento del motore [mm] per questo passo, data la forza misurata F [N]."""
         e = F - self.F_ref
         if self.active and abs(e) < self.stop:
             self.active = False

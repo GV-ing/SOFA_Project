@@ -1,14 +1,15 @@
-# modules/protocols.py
-"""Protocolli di prova del Progetto 5 eseguiti in SOFA (senza GUI).
+"""
+modules/protocols.py
 
-  free_cycle    ciclo libero senza oggetto: carico a auto_rate fino a T = auto_T_reverse
-                (10 N) o a u = u_max, poi scarico a u = 0                       -> H [%]
-  contact_test  avvicinamento a contact_rate -> rilevamento a 5 mN (k commuta nella config. b)
-                -> regolazione a 5 mN +/-10 % -> F in banda a motore fermo per contact_settle_s
-                -> finestra di hold_duration s con il regolatore attivo
-                -> stabilita' (traccia) e permanenza nella banda 4.5-5.5 mN (assistente)
+Protocolli di prova eseguiti in SOFA senza GUI, usati da tools/run_cycle.py e dal Monte Carlo
+(modules/mc_worker.py).
 
-Usato da tools/run_cycle.py e dal Monte Carlo (modules/mc_worker.py).
+    free_cycle      ciclo libero senza oggetto: carico a auto_rate fino a T = auto_T_reverse
+                    o u = u_max, poi scarico fino a u = 0. Metrica: H [%]
+    contact_test    avvicinamento a contact_rate, rilevamento a 5 mN (k commuta nella
+                    config. b), regolazione a 5 mN +/-10 %, contact_settle_s in banda a
+                    motore fermo, finestra di hold_duration s con regolatore attivo.
+                    Metriche: stabilità e permanenza nella banda
 """
 
 import csv
@@ -23,8 +24,8 @@ from modules.metrics import contact_stability, hysteresis_H
 CONFIGS = SPRING_CONFIGS
 
 
+# salva la cronologia del controller in CSV (una riga per passo)
 def save_series(path, history):
-    """Cronologia del controller in CSV (una riga per passo, colonne di HISTORY_FIELDS)."""
     os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     keys = list(history)
     with open(path, "w", newline="", encoding="utf-8") as f:
@@ -34,8 +35,9 @@ def save_series(path, history):
     return path
 
 
+# costruisce la scena, esegue un ciclo autonomo e restituisce
+# (root, controller, passi, tempo di calcolo, timeout)
 def simulate(overrides, stop_after_hold, max_time=120.0):
-    """Costruisce la scena, esegue un ciclo autonomo e restituisce (root, ctrl, passi, s, timeout)."""
     import Sofa.Core
     import Sofa.Simulation
 
@@ -62,8 +64,8 @@ def simulate(overrides, stop_after_hold, max_time=120.0):
     return root, ctrl, n, time.perf_counter() - t0, timed_out
 
 
+# ciclo libero: restituisce (metriche, cronologia)
 def free_cycle(overrides):
-    """Ciclo libero: restituisce (metriche, cronologia)."""
     root, ctrl, n, elapsed, timed_out = simulate(
         {"contact_object": "none", **overrides}, stop_after_hold=False)
     h = {k: list(v) for k, v in ctrl.history.items()}
@@ -72,8 +74,8 @@ def free_cycle(overrides):
     return out, h
 
 
+# prova di contatto su obj ("rigid" o "soft"): restituisce (metriche, cronologia)
 def contact_test(obj, overrides):
-    """Prova di contatto su obj ('rigid' | 'soft'): restituisce (metriche, cronologia)."""
     P = {**NOMINAL_PARAMS, **overrides}
     o = {**overrides, "contact_object": obj, "auto_rate": P["contact_rate"]}
     root, ctrl, n, elapsed, timed_out = simulate(o, stop_after_hold=True)
@@ -87,13 +89,14 @@ def contact_test(obj, overrides):
         out = contact_stability(t, F, phase, duration=P["hold_duration"],
                                 ptp_max=P["stability_ptp_max"],
                                 loss_force=P["contact_loss_force"], band=band)
-    else:   # la regolazione non si e' assestata entro max_time: prova non superata
+    else:   # la regolazione non si è assestata entro max_time: prova non superata
         out = {"F_mean_N": float("nan"), "F_min_N": float("nan"), "F_max_N": float("nan"),
                "F_ptp_N": float("nan"), "ptp_over_mean": float("nan"), "contact_lost": False,
                "hold_duration_s": 0.0, "window_complete": False, "in_band": False,
                "stable": False}
     out["settled"] = bool(hold.size >= 2)
 
+    # valori al rilevamento e durante la regolazione
     det = np.flatnonzero(contact == 1)
     if det.size:
         i = int(det[0])
